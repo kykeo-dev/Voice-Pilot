@@ -625,7 +625,7 @@ elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester
     col_mcp1, col_mcp2 = st.columns(2)
 
     with col_mcp1:
-        st.markdown("**Catalogue MCP (Reecall)**")
+        st.markdown("**Catalogue MCP**")
         mcp_options = {m.get('name', 'Sans nom'): m['id'] for m in available_mcps} if available_mcps else {}
         default_mcp_ids = fd.get("mcpIds", [])
         default_mcp_names = [n for n, mid in mcp_options.items() if mid in default_mcp_ids]
@@ -1013,4 +1013,5 @@ elif main_action == "📡 Logs API":
                     if log['resp_body']:
                         st.json(log['resp_body'])
                     else:
+
                         st.info("Aucun contenu retourné par le serveur.")
