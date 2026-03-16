@@ -41,18 +41,87 @@ SIP_HEADER_OPTIONS = ["SIP_ALL_HEADERS", "SIP_X_HEADERS", "SIP_NO_HEADERS"]
 # --- CSS AXIALYS ---
 st.markdown("""
 <style>
-    .stApp { background-color: #FAFAFA; }
-    h1, h2, h3 { color: #002C5F !important; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
-    div.stButton > button:first-child { background-color: #002C5F; color: white; border-radius: 8px; border: none; font-weight: bold; }
-    div.stButton > button:first-child:hover { background-color: #004080; color: white; }
-    .call-status-box { padding: 15px; border-radius: 10px; text-align: center; margin-bottom: 10px; border: 1px solid #ddd; }
-    .status-off { background-color: #f8d7da; color: #721c24; }
-    .status-on { background-color: #d4edda; color: #155724; }
-    .exchange-card { background-color: white; padding: 15px; border-radius: 8px; border: 1px solid #e0e0e0; margin-bottom: 10px; }
-    [data-testid="stSidebar"] { background-color: #FFFFFF; border-right: 1px solid #E0E0E0; }
-    [data-testid="stSidebar"] img { display: block; margin: 20px auto; border-radius: 10px; }
-    .log-method { font-weight: bold; color: #002C5F; }
-    .extraction-row { padding: 10px; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 5px; background-color: white; }
+    /*
+     * ✅ Bonne pratique Streamlit :
+     * On utilise les variables CSS injectées par Streamlit lui-même.
+     * Elles changent automatiquement quand l'utilisateur bascule le thème,
+     * indépendamment du thème du système d'exploitation.
+     *   --background-color           → fond principal
+     *   --secondary-background-color → fond sidebar / cartes
+     *   --text-color                 → couleur du texte principal
+     */
+
+    .stApp {
+        background-color: var(--background-color);
+    }
+
+    h1, h2, h3 {
+        /* #3D6FA3 : bleu Axialys "intermédiaire", lisible sur fond clair ET sombre */
+        color: #3D6FA3 !important;
+        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    }
+
+    div.stButton > button:first-child {
+        background-color: #002C5F;
+        color: white !important;
+        border-radius: 8px;
+        border: none;
+        font-weight: bold;
+    }
+    div.stButton > button:first-child:hover {
+        background-color: #004080;
+        color: white !important;
+    }
+
+    .call-status-box {
+        padding: 15px;
+        border-radius: 10px;
+        text-align: center;
+        margin-bottom: 10px;
+        border: 1px solid rgba(128, 128, 128, 0.3);
+    }
+    /* rgba pour que le fond coloré reste lisible en dark sans paraître trop agressif */
+    .status-off {
+        background-color: rgba(248, 215, 218, 0.85);
+        color: #721c24;
+    }
+    .status-on {
+        background-color: rgba(212, 237, 218, 0.85);
+        color: #155724;
+    }
+
+    .exchange-card {
+        background-color: var(--secondary-background-color);
+        color: var(--text-color);
+        padding: 15px;
+        border-radius: 8px;
+        border: 1px solid rgba(128, 128, 128, 0.2);
+        margin-bottom: 10px;
+    }
+
+    [data-testid="stSidebar"] {
+        background-color: var(--secondary-background-color) !important;
+        border-right: 1px solid rgba(128, 128, 128, 0.2) !important;
+    }
+    [data-testid="stSidebar"] img {
+        display: block;
+        margin: 20px auto;
+        border-radius: 10px;
+    }
+
+    .log-method {
+        font-weight: bold;
+        color: #3D6FA3;
+    }
+
+    .extraction-row {
+        padding: 10px;
+        border: 1px solid rgba(128, 128, 128, 0.2);
+        border-radius: 8px;
+        margin-bottom: 5px;
+        background-color: var(--secondary-background-color);
+        color: var(--text-color);
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -625,7 +694,7 @@ elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester
     col_mcp1, col_mcp2 = st.columns(2)
 
     with col_mcp1:
-        st.markdown("**Catalogue MCP**")
+        st.markdown("**Catalogue MCP (Reecall)**")
         mcp_options = {m.get('name', 'Sans nom'): m['id'] for m in available_mcps} if available_mcps else {}
         default_mcp_ids = fd.get("mcpIds", [])
         default_mcp_names = [n for n, mid in mcp_options.items() if mid in default_mcp_ids]
@@ -1013,5 +1082,4 @@ elif main_action == "📡 Logs API":
                     if log['resp_body']:
                         st.json(log['resp_body'])
                     else:
-
                         st.info("Aucun contenu retourné par le serveur.")
