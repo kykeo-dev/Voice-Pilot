@@ -76,6 +76,10 @@ if 'var_edit_id' not in st.session_state:
     st.session_state.var_edit_id = None
 if 'var_show_form' not in st.session_state:
     st.session_state.var_show_form = False
+if 'mcp_edit_id' not in st.session_state:
+    st.session_state.mcp_edit_id = None
+if 'mcp_show_form' not in st.session_state:
+    st.session_state.mcp_show_form = False
 
 
 def reset_form():
@@ -316,6 +320,21 @@ def delete_variable(api_key, variable_id):
     return make_api_request('DELETE', f"{API_BASE}/core/variables/{variable_id}", headers=headers)
 
 
+def save_mcp(api_key, payload, mcp_id=None):
+    headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+    if mcp_id:
+        return make_api_request('PATCH', f"{API_BASE}/ai/MCP/{mcp_id}",
+                                headers=headers, json=payload), "modifié"
+    else:
+        return make_api_request('POST', f"{API_BASE}/ai/MCP/",
+                                headers=headers, json=payload), "créé"
+
+
+def delete_mcp(api_key, mcp_id):
+    headers = {'Authorization': f'Bearer {api_key}'}
+    return make_api_request('DELETE', f"{API_BASE}/ai/MCP/{mcp_id}", headers=headers)
+
+
 def fetch_assistant_tools(api_key, assistant_id):
     headers = {'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'}
     where_param = json.dumps({"assistantId": assistant_id})
@@ -507,7 +526,7 @@ with st.sidebar:
     main_action = st.radio(
         "📍 Menu Principal",
         ["✏️ Modifier / Tester un assistant", "✨ Créer un nouvel assistant",
-         "📜 Consulter les conversations", "🔑 Variables", "📡 Logs API"],
+         "📜 Consulter les conversations", "🔑 Variables", "🔌 Serveurs MCP", "📡 Logs API"],
         key="main_nav_radio"
     )
 
@@ -524,13 +543,12 @@ with st.sidebar:
         selected_name = st.selectbox("Sélectionnez l'assistant :", list(ass_options.keys()))
         selected_id = ass_options[selected_name]
 
-        # On pose uniquement un flag — pas de st.rerun() ici
         if selected_id != st.session_state.last_loaded_id:
             st.session_state.last_loaded_id = selected_id
             st.session_state['_pending_load_id'] = selected_id
 
 # =============================================================================
-# CHARGEMENT DIFFÉRÉ — hors sidebar, pour ne pas bloquer le radio
+# CHARGEMENT DIFFÉRÉ — hors sidebar
 # =============================================================================
 if st.session_state.get('_pending_load_id'):
     pending_id = st.session_state.pop('_pending_load_id')
@@ -629,7 +647,6 @@ elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester
         with st.container():
             st.markdown("<div class='extraction-row'>", unsafe_allow_html=True)
             col1, col2, col3, col4, col5, col6 = st.columns([2, 1.5, 3, 2, 1, 0.5])
-
             with col1:
                 field['name'] = st.text_input("Nom", value=field.get('name', ''),
                                               key=f"f_name_{widget_key_suffix}_{i}", label_visibility="collapsed")
@@ -1032,14 +1049,13 @@ elif main_action == "🔑 Variables":
             st.session_state.var_show_form = True
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # --- Formulaire création / édition ---
     if st.session_state.var_show_form:
         st.divider()
-        is_edit = st.session_state.var_edit_id is not None
-        st.subheader("✏️ Modifier la variable" if is_edit else "➕ Nouvelle variable")
+        is_var_edit = st.session_state.var_edit_id is not None
+        st.subheader("✏️ Modifier la variable" if is_var_edit else "➕ Nouvelle variable")
 
         prefill = {}
-        if is_edit:
+        if is_var_edit:
             all_vars_prefill = fetch_variables(api_key, project_id)
             prefill = next((v for v in all_vars_prefill if v['id'] == st.session_state.var_edit_id), {})
 
@@ -1097,7 +1113,6 @@ elif main_action == "🔑 Variables":
 
     st.divider()
 
-    # --- Liste des variables ---
     with st.spinner("Chargement des variables..."):
         all_variables = fetch_variables(api_key, project_id)
 
@@ -1149,7 +1164,164 @@ elif main_action == "🔑 Variables":
                         else:
                             st.error(f"Échec suppression (HTTP {r.status_code}).")
 
-# === VUE 5 : LOGS API ===
+# === VUE 5 : SERVEURS MCP ===
+elif main_action == "🔌 Serveurs MCP":
+    st.title("Gestion des Serveurs MCP")
+    st.info("Les serveurs MCP permettent à vos assistants d'utiliser des outils externes via SSE. Utilisez `{ ma_variable }` dans l'URL et les headers pour injecter des secrets.")
+
+    col_hdr, col_btn = st.columns([4, 1])
+    with col_hdr:
+        mcp_scope_filter = st.radio("Périmètre affiché", ["Tous", "Projet", "Organisation"],
+                                    horizontal=True, key="mcp_scope_filter")
+    with col_btn:
+        st.markdown("<div style='margin-top:28px'>", unsafe_allow_html=True)
+        if st.button("➕ Nouveau serveur MCP", use_container_width=True):
+            st.session_state.mcp_edit_id = None
+            st.session_state.mcp_show_form = True
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    if st.session_state.mcp_show_form:
+        st.divider()
+        is_mcp_edit = st.session_state.mcp_edit_id is not None
+        st.subheader("✏️ Modifier le serveur MCP" if is_mcp_edit else "➕ Nouveau serveur MCP")
+
+        mcp_prefill = {}
+        if is_mcp_edit:
+            all_mcps_prefill = fetch_mcps(api_key)
+            mcp_prefill = next((m for m in all_mcps_prefill if m['id'] == st.session_state.mcp_edit_id), {})
+
+        existing_headers = mcp_prefill.get("headers", {})
+        if isinstance(existing_headers, dict):
+            headers_str = "\n".join(f"{k}: {v}" for k, v in existing_headers.items())
+        else:
+            headers_str = ""
+
+        with st.form("mcp_form"):
+            mf1, mf2 = st.columns(2)
+            with mf1:
+                m_name = st.text_input("Nom *", value=mcp_prefill.get("name", ""),
+                                       placeholder="ex: Freshdesk MCP, CRM Tools...")
+                m_url = st.text_input("URL SSE *", value=mcp_prefill.get("url", ""),
+                                      placeholder="https://api.example.com/mcp/sse")
+                m_scope = st.radio("Périmètre", ["Projet", "Organisation"], horizontal=True,
+                                   index=0 if mcp_prefill.get("projectId") else 1)
+            with mf2:
+                m_desc = st.text_area("Description", value=mcp_prefill.get("description", ""),
+                                      height=80, placeholder="Décrivez les capacités de ce serveur...")
+                m_headers_str = st.text_area(
+                    "Headers HTTP (un par ligne, format `Clé: Valeur`)",
+                    value=headers_str, height=100,
+                    placeholder="Authorization: Bearer { mcpApiToken }\nX-Custom-Header: valeur"
+                )
+
+            mf3, mf4 = st.columns(2)
+            with mf3:
+                m_submitted = st.form_submit_button("💾 Enregistrer", type="primary", use_container_width=True)
+            with mf4:
+                m_cancelled = st.form_submit_button("Annuler", use_container_width=True)
+
+        if m_cancelled:
+            st.session_state.mcp_show_form = False
+            st.session_state.mcp_edit_id = None
+            st.rerun()
+
+        if m_submitted:
+            if not m_name.strip():
+                st.error("Le **Nom** est obligatoire.")
+            elif not m_url.strip():
+                st.error("L'**URL** est obligatoire.")
+            else:
+                parsed_headers = {}
+                for line in m_headers_str.strip().split("\n"):
+                    line = line.strip()
+                    if ": " in line:
+                        k, v = line.split(": ", 1)
+                        parsed_headers[k.strip()] = v.strip()
+
+                payload_mcp = {
+                    "name": m_name.strip(),
+                    "url": m_url.strip(),
+                    "description": m_desc.strip(),
+                    "headers": parsed_headers
+                }
+                if m_scope == "Projet":
+                    payload_mcp["projectId"] = project_id
+
+                with st.spinner("Enregistrement..."):
+                    resp_m, act_m = save_mcp(api_key, payload_mcp, st.session_state.mcp_edit_id)
+                    if resp_m.status_code in (200, 201):
+                        st.success(f"Serveur MCP **{m_name}** {act_m} avec succès !")
+                        fetch_mcps.clear()
+                        st.session_state.mcp_show_form = False
+                        st.session_state.mcp_edit_id = None
+                        st.rerun()
+                    else:
+                        try:
+                            err = resp_m.json()
+                        except Exception:
+                            err = resp_m.text
+                        st.error(f"Échec (HTTP {resp_m.status_code}) : {err}")
+
+    st.divider()
+
+    with st.spinner("Chargement des serveurs MCP..."):
+        all_mcps_list = fetch_mcps(api_key)
+
+    if mcp_scope_filter == "Projet":
+        displayed_mcps = [m for m in all_mcps_list if m.get("projectId")]
+    elif mcp_scope_filter == "Organisation":
+        displayed_mcps = [m for m in all_mcps_list if not m.get("projectId")]
+    else:
+        displayed_mcps = all_mcps_list
+
+    if not displayed_mcps:
+        st.info("Aucun serveur MCP trouvé pour ce périmètre.")
+    else:
+        h1, h2, h3, h4, h5, h6 = st.columns([2, 3, 1, 1.5, 0.7, 0.7])
+        h1.caption("Nom")
+        h2.caption("URL")
+        h3.caption("Headers")
+        h4.caption("Périmètre")
+        h5.caption("Modifier")
+        h6.caption("Supprimer")
+        st.divider()
+
+        for mcp in displayed_mcps:
+            c1, c2, c3, c4, c5, c6 = st.columns([2, 3, 1, 1.5, 0.7, 0.7])
+            with c1:
+                st.markdown(f"**{esc(mcp.get('name', ''))}**")
+                if mcp.get("description"):
+                    st.caption(esc(mcp.get("description", "")))
+            with c2:
+                st.code(mcp.get("url", ""), language=None)
+            with c3:
+                h = mcp.get("headers", {})
+                if h and isinstance(h, dict) and len(h) > 0:
+                    st.markdown(f"✅ {len(h)} header{'s' if len(h) > 1 else ''}")
+                else:
+                    st.markdown("—")
+            with c4:
+                if mcp.get("projectId"):
+                    st.markdown("🏷️ Projet")
+                else:
+                    st.markdown("🌐 Organisation")
+            with c5:
+                if st.button("✏️", key=f"mcp_edit_{mcp['id']}", help="Modifier"):
+                    st.session_state.mcp_edit_id = mcp['id']
+                    st.session_state.mcp_show_form = True
+                    st.rerun()
+            with c6:
+                if st.button("🗑️", key=f"mcp_del_{mcp['id']}", help="Supprimer"):
+                    with st.spinner("Suppression..."):
+                        r = delete_mcp(api_key, mcp['id'])
+                        if r.status_code in (200, 204):
+                            st.success(f"Serveur MCP **{mcp.get('name')}** supprimé.")
+                            fetch_mcps.clear()
+                            st.rerun()
+                        else:
+                            st.error(f"Échec suppression (HTTP {r.status_code}).")
+
+# === VUE 6 : LOGS API ===
 elif main_action == "📡 Logs API":
     st.title("Logs Réseau (Les 10 dernières requêtes API)")
 
