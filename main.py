@@ -987,16 +987,38 @@ elif main_action == "📜 Consulter les conversations":
                 col_info, col_chat = st.columns([1, 2])
                 with col_info:
                     st.subheader("ℹ️ Informations")
-                    safe_status = esc(exchange_detail.get('status', 'N/A'))
-                    safe_type = esc(exchange_detail.get('type', 'N/A'))
+
+                    # Extraire les ressources utiles
+                    resources = exchange_detail.get("resources", []) or []
+                    res = {r['key']: r['value'] for r in resources if isinstance(r, dict)}
+
+                    duration_s = exchange_detail.get("duration") or res.get("session_end.duration_seconds")
+                    duration_str = f"{int(duration_s) // 60}m {int(duration_s) % 60}s" if duration_s else "N/A"
+
+                    caller = res.get("dynamic_config.caller_phone_number", "N/A")
+                    called = res.get("dynamic_config.called_phone_number", "N/A")
+                    llm   = res.get("assistant_config.llm", "N/A")
+                    stt   = res.get("assistant_config.stt_model", "N/A")
+                    tts   = res.get("assistant_config.tts_model", "N/A")
+                    voice = res.get("assistant_config.tts_voice", "")
+                    conn  = res.get("dynamic_config.connection_type", "N/A").upper()
+
+                    safe_status  = esc(exchange_detail.get('status', 'N/A'))
+                    safe_type    = esc(exchange_detail.get('type', 'N/A'))
                     safe_created = esc(format_date(exchange_detail.get('createdAt', '')))
-                    safe_updated = esc(format_date(exchange_detail.get('updatedAt', '')))
+
                     st.markdown(f"""
                     <div class="exchange-card">
-                        <b>Status:</b> {safe_status}<br>
-                        <b>Type:</b> {safe_type}<br>
-                        <b>Création:</b> {safe_created}<br>
-                        <b>Dernière maj:</b> {safe_updated}
+                        <b>Status :</b> {safe_status} &nbsp;|&nbsp; <b>Type :</b> {safe_type} &nbsp;|&nbsp; <b>Canal :</b> {esc(conn)}<br>
+                        <b>Date :</b> {safe_created}<br>
+                        <b>Durée :</b> {esc(duration_str)}<br>
+                        <hr style="margin:8px 0; opacity:0.2">
+                        <b>📞 Appelant :</b> {esc(caller)}<br>
+                        <b>📲 Appelé :</b> {esc(called)}<br>
+                        <hr style="margin:8px 0; opacity:0.2">
+                        <b>🧠 LLM :</b> {esc(llm)}<br>
+                        <b>🎤 STT :</b> {esc(stt)}<br>
+                        <b>🔊 TTS :</b> {esc(tts)}{f" / {esc(voice)}" if voice else ""}
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -1007,7 +1029,7 @@ elif main_action == "📜 Consulter les conversations":
                         else:
                             st.info("Aucun événement.")
 
-                    with st.expander("📊 Données (Data)"):
+                    with st.expander("📊 Données extraites (Data)"):
                         extra_data = exchange_detail.get("data")
                         if extra_data:
                             if isinstance(extra_data, str):
@@ -1020,6 +1042,30 @@ elif main_action == "📜 Consulter les conversations":
                             st.info("Aucune donnée d'extraction disponible pour cet appel.")
 
                 with col_chat:
+                    # --- LECTEUR AUDIO ---
+                    audio_url = (
+                        exchange_detail.get("recordingUrl")
+                        or exchange_detail.get("audioUrl")
+                        or exchange_detail.get("recording")
+                        or exchange_detail.get("mediaUrl")
+                    )
+                    if audio_url:
+                        st.subheader("🎧 Enregistrement")
+                        st.audio(audio_url)
+                    else:
+                        # Chercher dans les events au cas où l'URL y serait imbriquée
+                        events = exchange_detail.get("events", []) or []
+                        for ev in (events if isinstance(events, list) else []):
+                            for field in ["recordingUrl", "audioUrl", "recording", "mediaUrl"]:
+                                if ev.get(field):
+                                    audio_url = ev[field]
+                                    break
+                            if audio_url:
+                                break
+                        if audio_url:
+                            st.subheader("🎧 Enregistrement")
+                            st.audio(audio_url)
+
                     st.subheader("💬 Transcription")
                     messages = exchange_detail.get("messages", [])
                     if not messages:
