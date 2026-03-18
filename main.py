@@ -99,10 +99,10 @@ def reset_form():
 
 
 def load_assistant_into_form(assistant, tools=[]):
-    llm_id = assistant.get('llmId') or (assistant.get('llm', {}).get('id'))
-    tts_id = assistant.get('ttsId') or (assistant.get('tts', {}).get('id'))
-    stt_id = assistant.get('sttId') or (assistant.get('stt', {}).get('id'))
-    sts_id = assistant.get('stsId') or (assistant.get('sts', {}).get('id') if assistant.get('sts') else None)
+    llm_id = assistant.get('llmId') or ((assistant.get('llm') or {}).get('id'))
+    tts_id = assistant.get('ttsId') or ((assistant.get('tts') or {}).get('id'))
+    stt_id = assistant.get('sttId') or ((assistant.get('stt') or {}).get('id'))
+    sts_id = assistant.get('stsId') or ((assistant.get('sts') or {}).get('id'))
     voice_uuid = assistant.get('voiceId')
     if not voice_uuid and assistant.get('voice'):
         voice_uuid = assistant.get('voice').get('id')
