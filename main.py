@@ -522,7 +522,8 @@ if not api_valid or not project_valid:
 # === VUES 1 & 2 : CRÉATION OU MODIFICATION ===
 elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester un assistant"]:
     is_creation = main_action == "✨ Créer un nouvel assistant"
-    st.title("Création d'un nouvel assistant" if is_creation else "Configuration de l'Assistant")
+    assistant_name_display = fd.get("name", "") or "Nouvel assistant"
+    st.title("Création d'un nouvel assistant" if is_creation else f"Configuration de l'Assistant — {assistant_name_display}")
 
     fd = st.session_state.form_data
     widget_key_suffix = fd.get("id") or "new"
