@@ -72,6 +72,10 @@ if 'call_data' not in st.session_state:
     st.session_state.call_data = None
 if 'api_logs' not in st.session_state:
     st.session_state.api_logs = []
+if 'var_edit_id' not in st.session_state:
+    st.session_state.var_edit_id = None
+if 'var_show_form' not in st.session_state:
+    st.session_state.var_show_form = False
 
 
 def reset_form():
@@ -270,6 +274,23 @@ def fetch_sip_channel(api_key, assistant_id):
         return None
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def fetch_variables(api_key, project_id=""):
+    headers = {'Authorization': f'Bearer {api_key}'}
+    params = {}
+    if project_id:
+        params["where"] = json.dumps({"projectId": project_id})
+    try:
+        resp = requests.get(f"{API_BASE}/core/variables", headers=headers, params=params, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, dict): return data.get("data", data.get("items", []))
+            if isinstance(data, list): return data
+        return []
+    except Exception:
+        return []
+
+
 def save_assistant(api_key, payload, assistant_id=None):
     headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
     if assistant_id:
@@ -278,6 +299,21 @@ def save_assistant(api_key, payload, assistant_id=None):
     else:
         return make_api_request('POST', f"{API_BASE}/conversational/assistants/",
                                 headers=headers, json=payload), "créé"
+
+
+def save_variable(api_key, payload, variable_id=None):
+    headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+    if variable_id:
+        return make_api_request('PATCH', f"{API_BASE}/core/variables/{variable_id}",
+                                headers=headers, json=payload), "modifiée"
+    else:
+        return make_api_request('POST', f"{API_BASE}/core/variables",
+                                headers=headers, json=payload), "créée"
+
+
+def delete_variable(api_key, variable_id):
+    headers = {'Authorization': f'Bearer {api_key}'}
+    return make_api_request('DELETE', f"{API_BASE}/core/variables/{variable_id}", headers=headers)
 
 
 def fetch_assistant_tools(api_key, assistant_id):
@@ -471,7 +507,7 @@ with st.sidebar:
     main_action = st.radio(
         "📍 Menu Principal",
         ["✏️ Modifier / Tester un assistant", "✨ Créer un nouvel assistant",
-         "📜 Consulter les conversations", "📡 Logs API"],
+         "📜 Consulter les conversations", "🔑 Variables", "📡 Logs API"],
         key="main_nav_radio"
     )
 
@@ -522,11 +558,11 @@ if not api_valid or not project_valid:
 # === VUES 1 & 2 : CRÉATION OU MODIFICATION ===
 elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester un assistant"]:
     is_creation = main_action == "✨ Créer un nouvel assistant"
-    assistant_name_display = st.session_state.get("form_data", {}).get("name", "") or "Nouvel assistant"
-    st.title("Création d'un nouvel assistant" if is_creation else f"Configuration de l'Assistant — {assistant_name_display}")
-
     fd = st.session_state.form_data
     widget_key_suffix = fd.get("id") or "new"
+
+    assistant_name_display = st.session_state.get("form_data", {}).get("name", "") or "Nouvel assistant"
+    st.title("Création d'un nouvel assistant" if is_creation else f"Configuration de l'Assistant — {assistant_name_display}")
 
     with st.container():
         c1, c2 = st.columns(2)
@@ -980,7 +1016,140 @@ elif main_action == "📜 Consulter les conversations":
         else:
             st.info("Aucune conversation trouvée pour cet assistant.")
 
-# === VUE 4 : LOGS API ===
+# === VUE 4 : VARIABLES ===
+elif main_action == "🔑 Variables":
+    st.title("Gestion des Variables")
+    st.info("Les variables permettent d'injecter des valeurs dynamiques dans les instructions, URLs MCP ou headers. Syntaxe : `{ ma_variable }`")
+
+    col_hdr, col_btn = st.columns([4, 1])
+    with col_hdr:
+        scope_filter = st.radio("Périmètre affiché", ["Toutes", "Organisation", "Projet"],
+                                horizontal=True, key="var_scope_filter")
+    with col_btn:
+        st.markdown("<div style='margin-top:28px'>", unsafe_allow_html=True)
+        if st.button("➕ Nouvelle variable", use_container_width=True):
+            st.session_state.var_edit_id = None
+            st.session_state.var_show_form = True
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- Formulaire création / édition ---
+    if st.session_state.var_show_form:
+        st.divider()
+        is_edit = st.session_state.var_edit_id is not None
+        st.subheader("✏️ Modifier la variable" if is_edit else "➕ Nouvelle variable")
+
+        prefill = {}
+        if is_edit:
+            all_vars_prefill = fetch_variables(api_key, project_id)
+            prefill = next((v for v in all_vars_prefill if v['id'] == st.session_state.var_edit_id), {})
+
+        with st.form("var_form"):
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                v_key = st.text_input("Clé *", value=prefill.get("key", ""),
+                                      placeholder="ex: companyName, apiToken...")
+                v_scope = st.radio("Périmètre", ["Organisation", "Projet"], horizontal=True,
+                                   index=0 if not prefill.get("projectId") else 1)
+            with fc2:
+                v_secret = st.checkbox("🔒 Valeur secrète (chiffrée)", value=prefill.get("isSecret", False))
+                v_value = st.text_input(
+                    "Valeur *",
+                    value="" if prefill.get("isSecret") else prefill.get("value", ""),
+                    type="password" if v_secret else "default",
+                    placeholder="La valeur à injecter à l'exécution"
+                )
+
+            fc3, fc4 = st.columns(2)
+            with fc3:
+                submitted = st.form_submit_button("💾 Enregistrer", type="primary", use_container_width=True)
+            with fc4:
+                cancelled = st.form_submit_button("Annuler", use_container_width=True)
+
+        if cancelled:
+            st.session_state.var_show_form = False
+            st.session_state.var_edit_id = None
+            st.rerun()
+
+        if submitted:
+            if not v_key.strip():
+                st.error("La **Clé** est obligatoire.")
+            elif not v_value.strip():
+                st.error("La **Valeur** est obligatoire.")
+            else:
+                payload_var = {"key": v_key.strip(), "value": v_value.strip(), "isSecret": v_secret}
+                if v_scope == "Projet":
+                    payload_var["projectId"] = project_id
+
+                with st.spinner("Enregistrement..."):
+                    resp_v, act_v = save_variable(api_key, payload_var, st.session_state.var_edit_id)
+                    if resp_v.status_code in (200, 201):
+                        st.success(f"Variable **{v_key}** {act_v} avec succès !")
+                        fetch_variables.clear()
+                        st.session_state.var_show_form = False
+                        st.session_state.var_edit_id = None
+                        st.rerun()
+                    else:
+                        try:
+                            err = resp_v.json()
+                        except Exception:
+                            err = resp_v.text
+                        st.error(f"Échec (HTTP {resp_v.status_code}) : {err}")
+
+    st.divider()
+
+    # --- Liste des variables ---
+    with st.spinner("Chargement des variables..."):
+        all_variables = fetch_variables(api_key, project_id)
+
+    if scope_filter == "Organisation":
+        displayed = [v for v in all_variables if not v.get("projectId")]
+    elif scope_filter == "Projet":
+        displayed = [v for v in all_variables if v.get("projectId")]
+    else:
+        displayed = all_variables
+
+    if not displayed:
+        st.info("Aucune variable trouvée pour ce périmètre.")
+    else:
+        h1, h2, h3, h4, h5 = st.columns([2, 3, 1.5, 0.7, 0.7])
+        h1.caption("Clé")
+        h2.caption("Valeur")
+        h3.caption("Périmètre")
+        h4.caption("Modifier")
+        h5.caption("Supprimer")
+        st.divider()
+
+        for var in displayed:
+            c1, c2, c3, c4, c5 = st.columns([2, 3, 1.5, 0.7, 0.7])
+            with c1:
+                st.markdown(f"`{esc(var.get('key', ''))}`")
+            with c2:
+                if var.get("isSecret"):
+                    st.markdown("🔒 *valeur masquée*")
+                else:
+                    st.code(str(var.get("value", "")), language=None)
+            with c3:
+                if var.get("projectId"):
+                    st.markdown("🏷️ Projet")
+                else:
+                    st.markdown("🌐 Organisation")
+            with c4:
+                if st.button("✏️", key=f"var_edit_{var['id']}", help="Modifier"):
+                    st.session_state.var_edit_id = var['id']
+                    st.session_state.var_show_form = True
+                    st.rerun()
+            with c5:
+                if st.button("🗑️", key=f"var_del_{var['id']}", help="Supprimer"):
+                    with st.spinner("Suppression..."):
+                        r = delete_variable(api_key, var['id'])
+                        if r.status_code in (200, 204):
+                            st.success(f"Variable **{var.get('key')}** supprimée.")
+                            fetch_variables.clear()
+                            st.rerun()
+                        else:
+                            st.error(f"Échec suppression (HTTP {r.status_code}).")
+
+# === VUE 5 : LOGS API ===
 elif main_action == "📡 Logs API":
     st.title("Logs Réseau (Les 10 dernières requêtes API)")
 
