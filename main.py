@@ -1,5 +1,5 @@
 """
-Axialys Bot Manager — v3
+Axialys Bot Manager — v4
 """
 
 import streamlit as st
@@ -52,6 +52,7 @@ st.markdown("""
     [data-testid="stSidebar"] img { display: block; margin: 20px auto; border-radius: 10px; }
     .log-method { font-weight: bold; color: #3D6FA3; }
     .extraction-row { padding: 10px; border: 1px solid rgba(128,128,128,0.2); border-radius: 8px; margin-bottom: 5px; background-color: var(--secondary-background-color); color: var(--text-color); }
+    .engine-mode-card { padding: 12px 16px; border-radius: 8px; border: 2px solid rgba(61,111,163,0.3); background-color: var(--secondary-background-color); margin-bottom: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -86,7 +87,8 @@ def reset_form():
     st.session_state.form_data = {
         "name": "", "description": "", "instructions": "Tu es un assistant utile...",
         "firstMessage": "Bonjour, bienvenue chez Axialys !", "temperature": 0.3, "language": "fr-FR",
-        "timezone": "Europe/Paris", "llmId": None, "sttId": None, "ttsId": None, "voiceId": None, "id": None,
+        "timezone": "Europe/Paris", "llmId": None, "sttId": None, "ttsId": None, "voiceId": None,
+        "stsId": None, "engine_mode": "Classique (STT + LLM + TTS)", "id": None,
         "knowledgeBaseIds": [], "mcpIds": [], "mcps": [],
         "extraction_fields": [],
         "end_conversation_enabled": False, "closing_message": "",
@@ -100,13 +102,16 @@ def load_assistant_into_form(assistant, tools=[]):
     llm_id = assistant.get('llmId') or (assistant.get('llm', {}).get('id'))
     tts_id = assistant.get('ttsId') or (assistant.get('tts', {}).get('id'))
     stt_id = assistant.get('sttId') or (assistant.get('stt', {}).get('id'))
+    sts_id = assistant.get('stsId') or (assistant.get('sts', {}).get('id') if assistant.get('sts') else None)
     voice_uuid = assistant.get('voiceId')
     if not voice_uuid and assistant.get('voice'):
         voice_uuid = assistant.get('voice').get('id')
 
+    # Détecter le mode moteur
+    engine_mode = "STS (Speech-to-Speech)" if sts_id else "Classique (STT + LLM + TTS)"
+
     kb_ids = assistant.get('knowledgeBaseIds', [])
     if not isinstance(kb_ids, list): kb_ids = []
-
     mcp_ids = assistant.get('mcpIds', [])
     if not isinstance(mcp_ids, list): mcp_ids = []
 
@@ -114,10 +119,8 @@ def load_assistant_into_form(assistant, tools=[]):
     clean_mcp_urls = []
     if isinstance(raw_mcps, list):
         for item in raw_mcps:
-            if isinstance(item, str):
-                clean_mcp_urls.append(item)
-            elif isinstance(item, dict) and 'url' in item:
-                clean_mcp_urls.append(item['url'])
+            if isinstance(item, str): clean_mcp_urls.append(item)
+            elif isinstance(item, dict) and 'url' in item: clean_mcp_urls.append(item['url'])
 
     extraction_fields = []
     schema_obj = assistant.get('dataExtractionSchema')
@@ -139,6 +142,7 @@ def load_assistant_into_form(assistant, tools=[]):
         "temperature": assistant.get('temperature', 0.3), "language": assistant.get('language', 'fr-FR'),
         "timezone": assistant.get('timezone', 'Europe/Paris'),
         "llmId": llm_id, "sttId": stt_id, "ttsId": tts_id, "voiceId": voice_uuid,
+        "stsId": sts_id, "engine_mode": engine_mode,
         "id": assistant.get('id'),
         "knowledgeBaseIds": kb_ids, "mcpIds": mcp_ids, "mcps": clean_mcp_urls,
         "extraction_fields": extraction_fields,
@@ -165,26 +169,18 @@ def format_date(iso_string):
 def log_api_call(method, url, req_kwargs, response):
     if len(st.session_state.api_logs) >= 10:
         st.session_state.api_logs.pop(0)
-
     headers = req_kwargs.get("headers", {}).copy()
     if "Authorization" in headers:
         headers["Authorization"] = "Bearer ********"
-
     req_params = req_kwargs.get("params", {}).copy()
     for k, v in req_params.items():
         if isinstance(v, str):
-            try:
-                req_params[k] = json.loads(v)
-            except Exception:
-                pass
-
+            try: req_params[k] = json.loads(v)
+            except Exception: pass
     resp_body = None
     if response is not None:
-        try:
-            resp_body = response.json()
-        except Exception:
-            resp_body = response.text
-
+        try: resp_body = response.json()
+        except Exception: resp_body = response.text
     st.session_state.api_logs.append({
         "timestamp": datetime.now(ZoneInfo("Europe/Paris")).strftime("%H:%M:%S"),
         "method": method.upper(), "url": url, "req_headers": headers,
@@ -213,9 +209,11 @@ def fetch_lists(api_key):
         llm = requests.get(f"{API_BASE}/ai/llm", headers=headers, timeout=15)
         stt = requests.get(f"{API_BASE}/ai/stt/", headers=headers, timeout=15)
         tts = requests.get(f"{API_BASE}/ai/tts", headers=headers, timeout=15)
+        sts = requests.get(f"{API_BASE}/ai/sts/", headers=headers, timeout=15)
         if any(r.status_code != 200 for r in [llm, stt, tts]):
             return None
-        return {'llm': llm.json(), 'stt': stt.json(), 'tts': tts.json()}
+        sts_data = sts.json() if sts.status_code == 200 else []
+        return {'llm': llm.json(), 'stt': stt.json(), 'tts': tts.json(), 'sts': sts_data}
     except Exception:
         return None
 
@@ -373,13 +371,11 @@ def manage_system_tools(api_key, assistant_id, project_id, enable_end_call,
             payload["configuration"] = {"closingMessage": closing_message.strip()}
         if description_override and description_override.strip():
             payload["descriptionOverride"] = description_override.strip()
-
         if existing_end_tool:
             del_resp = make_api_request('DELETE', f"{API_BASE}/ai/tools/{existing_end_tool['id']}",
                                         headers=headers_auth)
             if del_resp.status_code not in (200, 204):
                 return False, f"Échec suppression ancien outil (HTTP {del_resp.status_code}). Création annulée."
-
         create_resp = make_api_request('POST', f"{API_BASE}/ai/tools/", headers=headers_json, json=payload)
         if create_resp.status_code not in (200, 201):
             return False, f"Échec création outil (HTTP {create_resp.status_code})."
@@ -404,7 +400,6 @@ def get_or_create_webrtc_channel(api_key, assistant_id, assistant_name, project_
             channels = channels.get("data", channels.get("items", []))
         if channels:
             return channels[0]['id']
-
         payload = {"name": f"WebRTC - {assistant_name}", "type": "WEBRTC",
                    "assistantId": assistant_id, "projectId": project_id}
         resp = make_api_request('POST', f"{API_BASE}/conversational/channels/", headers=headers, json=payload)
@@ -481,7 +476,6 @@ def fetch_exchange_details(api_key, exchange_id):
 with st.sidebar:
     st.image(LOGO_URL, width=150)
     st.divider()
-
     st.caption("🔧 Configuration Technique")
 
     api_key = st.text_input("Clé API", type="password", value=args.api_key, help="Entrez votre clé API Reecall")
@@ -542,7 +536,6 @@ with st.sidebar:
         ass_options = {a.get('name', 'Sans nom'): a['id'] for a in assistants_list}
         selected_name = st.selectbox("Sélectionnez l'assistant :", list(ass_options.keys()))
         selected_id = ass_options[selected_name]
-
         if selected_id != st.session_state.last_loaded_id:
             st.session_state.last_loaded_id = selected_id
             st.session_state['_pending_load_id'] = selected_id
@@ -565,7 +558,6 @@ if st.session_state.get('_pending_load_id'):
 if not api_valid or not project_valid:
     st.title("Voice Pilot")
     st.info("👋 Bienvenue ! Veuillez configurer vos accès dans le menu de gauche pour démarrer l'application.")
-
     if api_key and not api_valid:
         st.error("🔒 La Clé API renseignée est incorrecte.")
     elif api_valid and project_id and not project_valid:
@@ -632,7 +624,6 @@ elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester
     # --- DATA EXTRACTION ---
     st.subheader("📊 Variables à extraire (Data Extraction)")
     st.info("Définissez les informations que l'IA doit structurer à la fin de la conversation.")
-
     fields = fd.get("extraction_fields", [])
 
     if len(fields) > 0:
@@ -678,9 +669,8 @@ elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester
     if st.button("➕ Ajouter une variable"):
         if "extraction_fields" not in st.session_state.form_data:
             st.session_state.form_data['extraction_fields'] = []
-        st.session_state.form_data['extraction_fields'].append({
-            "name": "", "type": "string", "description": "", "enum": "", "required": False
-        })
+        st.session_state.form_data['extraction_fields'].append(
+            {"name": "", "type": "string", "description": "", "enum": "", "required": False})
         st.rerun()
 
     st.divider()
@@ -688,24 +678,19 @@ elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester
     # --- MCP ---
     st.subheader("🔌 Outils & Intégrations (MCP)")
     col_mcp1, col_mcp2 = st.columns(2)
-
     with col_mcp1:
         st.markdown("**Catalogue MCP (Reecall)**")
         mcp_options = {m.get('name', 'Sans nom'): m['id'] for m in available_mcps} if available_mcps else {}
         default_mcp_ids = fd.get("mcpIds", [])
         default_mcp_names = [n for n, mid in mcp_options.items() if mid in default_mcp_ids]
         selected_mcp_names = st.multiselect(
-            "Sélectionnez les serveurs à activer :",
-            options=list(mcp_options.keys()), default=default_mcp_names,
-            help="Ces outils sont déjà hébergés ou déclarés dans votre espace Reecall.",
-            key=f"mcp_select_{widget_key_suffix}")
+            "Sélectionnez les serveurs à activer :", options=list(mcp_options.keys()),
+            default=default_mcp_names, key=f"mcp_select_{widget_key_suffix}")
         selected_mcp_ids = [mcp_options[n] for n in selected_mcp_names]
-
     with col_mcp2:
         st.markdown("**URLs personnalisées (Tests locaux)**")
         mcp_urls_str = st.text_area(
-            "Adresses SSE directes (une par ligne) :",
-            value="\n".join(fd.get("mcps", [])), height=68,
+            "Adresses SSE directes (une par ligne) :", value="\n".join(fd.get("mcps", [])), height=68,
             placeholder="https://a1b2.ngrok.app/sse", label_visibility="collapsed",
             key=f"mcp_urls_{widget_key_suffix}")
         mcp_urls_list = [url.strip() for url in mcp_urls_str.split("\n") if url.strip()]
@@ -714,37 +699,125 @@ elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester
 
     # --- MOTEUR TECHNIQUE ---
     st.subheader("⚙️ Moteur Technique")
-    tc1, tc2, tc3 = st.columns(3)
+
+    ENGINE_MODES = ["Classique (STT + LLM + TTS)", "STS (Speech-to-Speech)"]
+    cur_mode = fd.get("engine_mode", "Classique (STT + LLM + TTS)")
+    cur_mode_idx = ENGINE_MODES.index(cur_mode) if cur_mode in ENGINE_MODES else 0
+
+    engine_mode = st.radio(
+        "Mode du moteur vocal",
+        ENGINE_MODES,
+        index=cur_mode_idx,
+        horizontal=True,
+        key=f"engine_mode_{widget_key_suffix}",
+        help="**Classique** : pipeline STT → LLM → TTS séparé. **STS** : modèle natif audio unifié (ex: GPT Realtime, Ultravox), latence réduite."
+    )
 
     def get_idx(opts, target):
         return list(opts.values()).index(target) if target in opts.values() else 0
 
-    with tc1:
-        st.markdown("**LLM**")
-        llm_opts = {i['name']: i['id'] for i in lists['llm']}
-        final_llm_id = llm_opts[
-            st.selectbox("Modèle LLM", list(llm_opts.keys()), index=get_idx(llm_opts, fd.get("llmId")))]
-    with tc2:
-        st.markdown("**STT**")
-        stt_opts = {i['name']: i['id'] for i in lists['stt']}
-        final_stt_id = stt_opts[
-            st.selectbox("Modèle STT", list(stt_opts.keys()), index=get_idx(stt_opts, fd.get("sttId")))]
-    with tc3:
-        st.markdown("**TTS**")
-        tts_map = {p['name']: p for p in lists['tts']}
-        prov_names = list(tts_map.keys())
-        prov_idx = 0
-        if fd.get("ttsId"):
-            for i, pname in enumerate(prov_names):
-                if tts_map[pname]['id'] == fd.get("ttsId"): prov_idx = i; break
-        prov_data = tts_map[st.selectbox("Fournisseur", prov_names, index=prov_idx)]
-        final_tts_id = prov_data['id']
-        voices = prov_data.get('voices', [])
-        final_voice_id = None
-        if voices:
-            v_opts = {f"{v['name']}": v['id'] for v in voices}
-            final_voice_id = v_opts[
-                st.selectbox("Voix", list(v_opts.keys()), index=get_idx(v_opts, fd.get("voiceId")))]
+    final_llm_id = None
+    final_stt_id = None
+    final_tts_id = None
+    final_voice_id = None
+    final_sts_id = None
+
+    if engine_mode == "Classique (STT + LLM + TTS)":
+        st.markdown("<div class='engine-mode-card'>", unsafe_allow_html=True)
+        tc1, tc2, tc3 = st.columns(3)
+        with tc1:
+            st.markdown("**🧠 LLM**")
+            llm_opts = {i['name']: i['id'] for i in lists['llm']}
+            final_llm_id = llm_opts[
+                st.selectbox("Modèle LLM", list(llm_opts.keys()), index=get_idx(llm_opts, fd.get("llmId")),
+                             key=f"llm_{widget_key_suffix}")]
+        with tc2:
+            st.markdown("**🎤 STT**")
+            stt_opts = {i['name']: i['id'] for i in lists['stt']}
+            final_stt_id = stt_opts[
+                st.selectbox("Modèle STT", list(stt_opts.keys()), index=get_idx(stt_opts, fd.get("sttId")),
+                             key=f"stt_{widget_key_suffix}")]
+        with tc3:
+            st.markdown("**🔊 TTS**")
+            tts_map = {p['name']: p for p in lists['tts']}
+            prov_names = list(tts_map.keys())
+            prov_idx = 0
+            if fd.get("ttsId"):
+                for i, pname in enumerate(prov_names):
+                    if tts_map[pname]['id'] == fd.get("ttsId"): prov_idx = i; break
+            prov_data = tts_map[st.selectbox("Fournisseur TTS", prov_names, index=prov_idx,
+                                             key=f"tts_prov_{widget_key_suffix}")]
+            final_tts_id = prov_data['id']
+            voices = prov_data.get('voices', [])
+            if voices:
+                v_opts = {v['name']: v['id'] for v in voices}
+                final_voice_id = v_opts[
+                    st.selectbox("Voix", list(v_opts.keys()), index=get_idx(v_opts, fd.get("voiceId")),
+                                 key=f"voice_{widget_key_suffix}")]
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    else:  # STS
+        st.markdown("<div class='engine-mode-card'>", unsafe_allow_html=True)
+        sts_list = lists.get('sts', [])
+
+        if not sts_list:
+            st.warning("Aucun modèle STS disponible via l'API.")
+        else:
+            sc1, sc2 = st.columns(2)
+            with sc1:
+                st.markdown("**🎙️ Modèle STS**")
+                # Filtrer les modèles non désactivés
+                sts_active = [m for m in sts_list if not m.get('disabled', False)]
+                sts_opts = {f"{m['name']} ({m.get('provider','')})": m for m in sts_active}
+                sts_names = list(sts_opts.keys())
+
+                # Trouver l'index par défaut
+                sts_default_idx = 0
+                if fd.get("stsId"):
+                    for i, m in enumerate(sts_active):
+                        if m['id'] == fd.get("stsId"): sts_default_idx = i; break
+
+                selected_sts_name = st.selectbox("Modèle STS", sts_names, index=sts_default_idx,
+                                                 key=f"sts_model_{widget_key_suffix}")
+                selected_sts = sts_opts[selected_sts_name]
+                final_sts_id = selected_sts['id']
+
+                st.caption(selected_sts.get('description', ''))
+
+            with sc2:
+                st.markdown("**🔊 Voix**")
+                sts_voices = selected_sts.get('voices', [])
+                if sts_voices:
+                    # Regrouper par langue pour faciliter la sélection
+                    v_opts = {}
+                    for v in sts_voices:
+                        lang_flag = v.get('language', '')
+                        gender_icon = "👨" if v.get('gender') == 'male' else ("👩" if v.get('gender') == 'female' else "🧑")
+                        label = f"{gender_icon} {v['name']} [{lang_flag}]"
+                        v_opts[label] = v['id']
+
+                    voice_default_idx = 0
+                    if fd.get("voiceId"):
+                        voice_ids = list(v_opts.values())
+                        if fd.get("voiceId") in voice_ids:
+                            voice_default_idx = voice_ids.index(fd.get("voiceId"))
+
+                    selected_voice_label = st.selectbox("Voix STS", list(v_opts.keys()),
+                                                        index=voice_default_idx,
+                                                        key=f"sts_voice_{widget_key_suffix}")
+                    final_voice_id = v_opts[selected_voice_label]
+
+                    # Info sur la voix sélectionnée
+                    sel_voice_obj = next((v for v in sts_voices if v['id'] == final_voice_id), {})
+                    if sel_voice_obj.get('description'):
+                        st.caption(sel_voice_obj['description'])
+                    if sel_voice_obj.get('multilingual'):
+                        st.caption("🌍 Voix multilingue")
+                else:
+                    st.info("Aucune voix disponible pour ce modèle.")
+
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.caption("ℹ️ En mode STS, le LLM, STT et TTS sont gérés nativement par le modèle sélectionné. La température reste applicable.")
 
     st.divider()
 
@@ -760,8 +833,10 @@ elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester
                 validation_errors.append("Le **Nom** est obligatoire.")
             if not inst or not inst.strip():
                 validation_errors.append("Le **System Prompt** (instructions) est obligatoire.")
-            if not final_voice_id:
-                validation_errors.append("La **Voix** est obligatoire (sélectionnez un fournisseur TTS avec des voix).")
+            if engine_mode == "Classique (STT + LLM + TTS)" and not final_voice_id:
+                validation_errors.append("La **Voix** est obligatoire.")
+            if engine_mode == "STS (Speech-to-Speech)" and not final_sts_id:
+                validation_errors.append("Le **modèle STS** est obligatoire.")
 
             if validation_errors:
                 for err in validation_errors:
@@ -769,7 +844,6 @@ elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester
             else:
                 parsed_schema = None
                 valid_fields = [f for f in fields if f.get('name', '').strip()]
-
                 if valid_fields:
                     properties = {}
                     required_fields = []
@@ -781,20 +855,13 @@ elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester
                         properties[v_name] = prop
                         if f['required']:
                             required_fields.append(v_name)
-
                     required_fields = [r for r in required_fields if r in properties]
+                    parsed_schema = {"type": "object", "properties": properties,
+                                     "required": required_fields, "additionalProperties": False}
 
-                    parsed_schema = {
-                        "type": "object",
-                        "properties": properties,
-                        "required": required_fields,
-                        "additionalProperties": False
-                    }
-
+                # Construire le payload selon le mode
                 payload = {
                     "name": name.strip(), "description": desc, "instructions": inst, "language": lang,
-                    "llmId": final_llm_id, "ttsId": final_tts_id, "sttId": final_stt_id,
-                    "voiceId": final_voice_id,
                     "projectId": project_id, "firstMessage": first_msg,
                     "timezone": "Europe/Paris", "temperature": temp,
                     "knowledgeBaseIds": fd.get("knowledgeBaseIds", []),
@@ -802,11 +869,24 @@ elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester
                     "dataExtractionSchema": parsed_schema
                 }
 
+                if engine_mode == "STS (Speech-to-Speech)":
+                    payload["stsId"] = final_sts_id
+                    payload["voiceId"] = final_voice_id
+                    # Effacer les champs classiques pour éviter les conflits
+                    payload["llmId"] = None
+                    payload["sttId"] = None
+                    payload["ttsId"] = None
+                else:
+                    payload["llmId"] = final_llm_id
+                    payload["ttsId"] = final_tts_id
+                    payload["sttId"] = final_stt_id
+                    payload["voiceId"] = final_voice_id
+                    payload["stsId"] = None
+
                 target_id = fd.get("id") if not is_creation else None
 
                 with st.spinner('Envoi en cours...'):
                     resp, act = save_assistant(api_key, payload, target_id)
-
                     if resp.status_code in [200, 201]:
                         assistant_id = resp.json().get('id')
                         if not assistant_id:
@@ -819,7 +899,6 @@ elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester
                                 st.warning(f"Assistant {act}, mais outil raccrochage échoué : {tool_msg}")
                             else:
                                 st.success(f"Succès ({act}) !")
-
                             st.session_state.form_data['id'] = assistant_id
                             if is_creation:
                                 st.session_state.previous_action = "✏️ Modifier / Tester un assistant"
@@ -827,10 +906,8 @@ elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester
                             fetch_assistants.clear()
                             st.rerun()
                     else:
-                        try:
-                            err_detail = resp.json()
-                        except Exception:
-                            err_detail = resp.text
+                        try: err_detail = resp.json()
+                        except Exception: err_detail = resp.text
                         st.error(f"Échec sauvegarde (HTTP {resp.status_code}) : {err_detail}")
 
     with col_deploy:
@@ -844,7 +921,6 @@ elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester
                     enc_token = urllib.parse.quote(creds['token'].strip(), safe="")
                     magic_link = f"https://meet.livekit.io/custom?liveKitUrl={enc_url}&token={enc_token}"
                     safe_link = esc(magic_link)
-
                     st.markdown(f"""
                         <a href="{safe_link}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;">
                             <div style="background-color:#28a745;color:white;padding:10px;border-radius:8px;text-align:center;font-weight:bold;margin-bottom:15px;box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
@@ -852,7 +928,6 @@ elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester
                             </div>
                         </a>
                     """, unsafe_allow_html=True)
-
                     if st.button("❌ Raccrocher / Réinitialiser", use_container_width=True):
                         st.session_state.call_data = None
                         st.rerun()
@@ -871,15 +946,9 @@ elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester
                 existing_sip_id = sip_channel.get("id") if sip_channel else None
 
                 if sip_channel:
-                    st.markdown(
-                        '<div class="call-status-box status-on">🟢 <b>LIGNE SIP ACTIVE</b>'
-                        '<br><span style="font-size: 0.8em; font-weight:normal;">Cet assistant est raccordé au réseau.</span></div>',
-                        unsafe_allow_html=True)
+                    st.markdown('<div class="call-status-box status-on">🟢 <b>LIGNE SIP ACTIVE</b><br><span style="font-size: 0.8em; font-weight:normal;">Cet assistant est raccordé au réseau.</span></div>', unsafe_allow_html=True)
                 else:
-                    st.markdown(
-                        '<div class="call-status-box status-off">🔴 <b>NON CONFIGURÉE</b>'
-                        '<br><span style="font-size: 0.8em; font-weight:normal;">Cet assistant ne peut pas recevoir d\'appels réels.</span></div>',
-                        unsafe_allow_html=True)
+                    st.markdown('<div class="call-status-box status-off">🔴 <b>NON CONFIGURÉE</b><br><span style="font-size: 0.8em; font-weight:normal;">Cet assistant ne peut pas recevoir d\'appels réels.</span></div>', unsafe_allow_html=True)
 
                 existing_nums = sip_channel.get("inboundNumbersWhitelist", []) if sip_channel else []
                 existing_ips = sip_channel.get("inboundAddressesWhitelist", []) if sip_channel else []
@@ -887,41 +956,28 @@ elif main_action in ["✨ Créer un nouvel assistant", "✏️ Modifier / Tester
                 existing_krisp = sip_channel.get("krispEnabled", False) if sip_channel else False
 
                 sip_nums_str = st.text_area("Numéros Autorisés (E.164)", value="\n".join(existing_nums),
-                                            placeholder="+879...\n+33000040001", height=68,
-                                            help="Autoriser les appels à destination de ces numéros.")
+                                            placeholder="+879...\n+33000040001", height=68)
                 sip_ips_str = st.text_area("Adresses IP Autorisées", value="\n".join(existing_ips),
-                                           placeholder="192.168.1.100", height=68,
-                                           help="Autoriser les serveurs Axialys à router vers ce bot.")
-
+                                           placeholder="192.168.1.100", height=68)
                 st.markdown("**Paramètres Avancés**")
-
-                sip_headers_option = st.selectbox(
-                    "Transmission des Headers SIP",
-                    options=SIP_HEADER_OPTIONS,
-                    index=SIP_HEADER_OPTIONS.index(existing_sip_headers)
-                    if existing_sip_headers in SIP_HEADER_OPTIONS else 0,
-                    help="ALL = tous les headers, X = uniquement X-headers, NO = aucun.")
-
-                krisp_enabled = st.checkbox("Réduction de bruit Krisp", value=existing_krisp,
-                                            help="Active la suppression de bruit Krisp sur le canal SIP.")
+                sip_headers_option = st.selectbox("Transmission des Headers SIP", options=SIP_HEADER_OPTIONS,
+                                                  index=SIP_HEADER_OPTIONS.index(existing_sip_headers)
+                                                  if existing_sip_headers in SIP_HEADER_OPTIONS else 0)
+                krisp_enabled = st.checkbox("Réduction de bruit Krisp", value=existing_krisp)
 
                 lbl_sip = "💾 Mettre à jour la ligne SIP" if sip_channel else "🔌 Créer la Ligne SIP"
                 if st.button(lbl_sip, use_container_width=True):
                     nums_list = [n.strip() for n in sip_nums_str.split("\n") if n.strip()]
                     ips_list = [ip.strip() for ip in sip_ips_str.split("\n") if ip.strip()]
-
                     if not nums_list and not ips_list:
                         st.error("⚠️ Sécurité Reecall : Renseignez au moins un numéro ou une IP.")
                     else:
                         payload_sip = {
                             "name": f"SIP Trunk - {name}", "type": "SIP",
                             "assistantId": fd.get("id"), "projectId": project_id,
-                            "inboundNumbersWhitelist": nums_list,
-                            "inboundAddressesWhitelist": ips_list,
-                            "includeSipHeaders": sip_headers_option,
-                            "krispEnabled": krisp_enabled
+                            "inboundNumbersWhitelist": nums_list, "inboundAddressesWhitelist": ips_list,
+                            "includeSipHeaders": sip_headers_option, "krispEnabled": krisp_enabled
                         }
-
                         with st.spinner("Configuration en cours..."):
                             resp_sip = save_sip_channel(api_key, existing_sip_id, payload_sip)
                             if resp_sip and resp_sip.status_code in [200, 201]:
@@ -955,7 +1011,6 @@ elif main_action == "📜 Consulter les conversations":
 
         with st.spinner("Récupération de l'historique..."):
             all_exchanges = fetch_exchanges(api_key, project_id)
-
             filtered_exchanges = []
             for exc in all_exchanges:
                 current_exc_ass_id = None
@@ -987,14 +1042,11 @@ elif main_action == "📜 Consulter les conversations":
                 col_info, col_chat = st.columns([1, 2])
                 with col_info:
                     st.subheader("ℹ️ Informations")
-
-                    # Extraire les ressources utiles
                     resources = exchange_detail.get("resources", []) or []
                     res = {r['key']: r['value'] for r in resources if isinstance(r, dict)}
 
                     duration_s = exchange_detail.get("duration") or res.get("session_end.duration_seconds")
                     duration_str = f"{int(duration_s) // 60}m {int(duration_s) % 60}s" if duration_s else "N/A"
-
                     caller = res.get("dynamic_config.caller_phone_number", "N/A")
                     called = res.get("dynamic_config.called_phone_number", "N/A")
                     llm   = res.get("assistant_config.llm", "N/A")
@@ -1002,7 +1054,6 @@ elif main_action == "📜 Consulter les conversations":
                     tts   = res.get("assistant_config.tts_model", "N/A")
                     voice = res.get("assistant_config.tts_voice", "")
                     conn  = res.get("dynamic_config.connection_type", "N/A").upper()
-
                     safe_status  = esc(exchange_detail.get('status', 'N/A'))
                     safe_type    = esc(exchange_detail.get('type', 'N/A'))
                     safe_created = esc(format_date(exchange_detail.get('createdAt', '')))
@@ -1024,47 +1075,34 @@ elif main_action == "📜 Consulter les conversations":
 
                     with st.expander("🛠️ Événements (Events)"):
                         events_data = exchange_detail.get("events")
-                        if events_data:
-                            st.json(events_data)
-                        else:
-                            st.info("Aucun événement.")
+                        if events_data: st.json(events_data)
+                        else: st.info("Aucun événement.")
 
                     with st.expander("📊 Données extraites (Data)"):
                         extra_data = exchange_detail.get("data")
                         if extra_data:
                             if isinstance(extra_data, str):
-                                try:
-                                    extra_data = json.loads(extra_data)
-                                except Exception:
-                                    pass
+                                try: extra_data = json.loads(extra_data)
+                                except Exception: pass
                             st.json(extra_data)
                         else:
                             st.info("Aucune donnée d'extraction disponible pour cet appel.")
 
                 with col_chat:
-                    # --- LECTEUR AUDIO ---
                     audio_url = (
-                        exchange_detail.get("recordingUrl")
-                        or exchange_detail.get("audioUrl")
-                        or exchange_detail.get("recording")
-                        or exchange_detail.get("mediaUrl")
+                        exchange_detail.get("audioUrl") or exchange_detail.get("recordingUrl")
+                        or exchange_detail.get("recording") or exchange_detail.get("mediaUrl")
                     )
+                    if not audio_url:
+                        events = exchange_detail.get("events", []) or []
+                        for ev in (events if isinstance(events, list) else []):
+                            for field in ["audioUrl", "recordingUrl", "recording", "mediaUrl"]:
+                                if ev.get(field): audio_url = ev[field]; break
+                            if audio_url: break
+
                     if audio_url:
                         st.subheader("🎧 Enregistrement")
                         st.audio(audio_url)
-                    else:
-                        # Chercher dans les events au cas où l'URL y serait imbriquée
-                        events = exchange_detail.get("events", []) or []
-                        for ev in (events if isinstance(events, list) else []):
-                            for field in ["recordingUrl", "audioUrl", "recording", "mediaUrl"]:
-                                if ev.get(field):
-                                    audio_url = ev[field]
-                                    break
-                            if audio_url:
-                                break
-                        if audio_url:
-                            st.subheader("🎧 Enregistrement")
-                            st.audio(audio_url)
 
                     st.subheader("💬 Transcription")
                     messages = exchange_detail.get("messages", [])
@@ -1099,7 +1137,6 @@ elif main_action == "🔑 Variables":
         st.divider()
         is_var_edit = st.session_state.var_edit_id is not None
         st.subheader("✏️ Modifier la variable" if is_var_edit else "➕ Nouvelle variable")
-
         prefill = {}
         if is_var_edit:
             all_vars_prefill = fetch_variables(api_key, project_id)
@@ -1108,24 +1145,18 @@ elif main_action == "🔑 Variables":
         with st.form("var_form"):
             fc1, fc2 = st.columns(2)
             with fc1:
-                v_key = st.text_input("Clé *", value=prefill.get("key", ""),
-                                      placeholder="ex: companyName, apiToken...")
+                v_key = st.text_input("Clé *", value=prefill.get("key", ""), placeholder="ex: companyName, apiToken...")
                 v_scope = st.radio("Périmètre", ["Organisation", "Projet"], horizontal=True,
                                    index=0 if not prefill.get("projectId") else 1)
             with fc2:
                 v_secret = st.checkbox("🔒 Valeur secrète (chiffrée)", value=prefill.get("isSecret", False))
-                v_value = st.text_input(
-                    "Valeur *",
-                    value="" if prefill.get("isSecret") else prefill.get("value", ""),
-                    type="password" if v_secret else "default",
-                    placeholder="La valeur à injecter à l'exécution"
-                )
-
+                v_value = st.text_input("Valeur *",
+                                        value="" if prefill.get("isSecret") else prefill.get("value", ""),
+                                        type="password" if v_secret else "default",
+                                        placeholder="La valeur à injecter à l'exécution")
             fc3, fc4 = st.columns(2)
-            with fc3:
-                submitted = st.form_submit_button("💾 Enregistrer", type="primary", use_container_width=True)
-            with fc4:
-                cancelled = st.form_submit_button("Annuler", use_container_width=True)
+            with fc3: submitted = st.form_submit_button("💾 Enregistrer", type="primary", use_container_width=True)
+            with fc4: cancelled = st.form_submit_button("Annuler", use_container_width=True)
 
         if cancelled:
             st.session_state.var_show_form = False
@@ -1133,15 +1164,11 @@ elif main_action == "🔑 Variables":
             st.rerun()
 
         if submitted:
-            if not v_key.strip():
-                st.error("La **Clé** est obligatoire.")
-            elif not v_value.strip():
-                st.error("La **Valeur** est obligatoire.")
+            if not v_key.strip(): st.error("La **Clé** est obligatoire.")
+            elif not v_value.strip(): st.error("La **Valeur** est obligatoire.")
             else:
                 payload_var = {"key": v_key.strip(), "value": v_value.strip(), "isSecret": v_secret}
-                if v_scope == "Projet":
-                    payload_var["projectId"] = project_id
-
+                if v_scope == "Projet": payload_var["projectId"] = project_id
                 with st.spinner("Enregistrement..."):
                     resp_v, act_v = save_variable(api_key, payload_var, st.session_state.var_edit_id)
                     if resp_v.status_code in (200, 201):
@@ -1151,49 +1178,34 @@ elif main_action == "🔑 Variables":
                         st.session_state.var_edit_id = None
                         st.rerun()
                     else:
-                        try:
-                            err = resp_v.json()
-                        except Exception:
-                            err = resp_v.text
+                        try: err = resp_v.json()
+                        except Exception: err = resp_v.text
                         st.error(f"Échec (HTTP {resp_v.status_code}) : {err}")
 
     st.divider()
-
     with st.spinner("Chargement des variables..."):
         all_variables = fetch_variables(api_key, project_id)
 
-    if scope_filter == "Organisation":
-        displayed = [v for v in all_variables if not v.get("projectId")]
-    elif scope_filter == "Projet":
-        displayed = [v for v in all_variables if v.get("projectId")]
-    else:
-        displayed = all_variables
+    if scope_filter == "Organisation": displayed = [v for v in all_variables if not v.get("projectId")]
+    elif scope_filter == "Projet": displayed = [v for v in all_variables if v.get("projectId")]
+    else: displayed = all_variables
 
     if not displayed:
         st.info("Aucune variable trouvée pour ce périmètre.")
     else:
         h1, h2, h3, h4, h5 = st.columns([2, 3, 1.5, 0.7, 0.7])
-        h1.caption("Clé")
-        h2.caption("Valeur")
-        h3.caption("Périmètre")
-        h4.caption("Modifier")
-        h5.caption("Supprimer")
+        h1.caption("Clé"); h2.caption("Valeur"); h3.caption("Périmètre")
+        h4.caption("Modifier"); h5.caption("Supprimer")
         st.divider()
-
         for var in displayed:
             c1, c2, c3, c4, c5 = st.columns([2, 3, 1.5, 0.7, 0.7])
-            with c1:
-                st.markdown(f"`{esc(var.get('key', ''))}`")
+            with c1: st.markdown(f"`{esc(var.get('key', ''))}`")
             with c2:
-                if var.get("isSecret"):
-                    st.markdown("🔒 *valeur masquée*")
-                else:
-                    st.code(str(var.get("value", "")), language=None)
+                if var.get("isSecret"): st.markdown("🔒 *valeur masquée*")
+                else: st.code(str(var.get("value", "")), language=None)
             with c3:
-                if var.get("projectId"):
-                    st.markdown("🏷️ Projet")
-                else:
-                    st.markdown("🌐 Organisation")
+                if var.get("projectId"): st.markdown("🏷️ Projet")
+                else: st.markdown("🌐 Organisation")
             with c4:
                 if st.button("✏️", key=f"var_edit_{var['id']}", help="Modifier"):
                     st.session_state.var_edit_id = var['id']
@@ -1230,17 +1242,13 @@ elif main_action == "🔌 Serveurs MCP":
         st.divider()
         is_mcp_edit = st.session_state.mcp_edit_id is not None
         st.subheader("✏️ Modifier le serveur MCP" if is_mcp_edit else "➕ Nouveau serveur MCP")
-
         mcp_prefill = {}
         if is_mcp_edit:
             all_mcps_prefill = fetch_mcps(api_key)
             mcp_prefill = next((m for m in all_mcps_prefill if m['id'] == st.session_state.mcp_edit_id), {})
 
         existing_headers = mcp_prefill.get("headers", {})
-        if isinstance(existing_headers, dict):
-            headers_str = "\n".join(f"{k}: {v}" for k, v in existing_headers.items())
-        else:
-            headers_str = ""
+        headers_str = "\n".join(f"{k}: {v}" for k, v in existing_headers.items()) if isinstance(existing_headers, dict) else ""
 
         with st.form("mcp_form"):
             mf1, mf2 = st.columns(2)
@@ -1254,17 +1262,12 @@ elif main_action == "🔌 Serveurs MCP":
             with mf2:
                 m_desc = st.text_area("Description", value=mcp_prefill.get("description", ""),
                                       height=80, placeholder="Décrivez les capacités de ce serveur...")
-                m_headers_str = st.text_area(
-                    "Headers HTTP (un par ligne, format `Clé: Valeur`)",
-                    value=headers_str, height=100,
-                    placeholder="Authorization: Bearer { mcpApiToken }\nX-Custom-Header: valeur"
-                )
-
+                m_headers_str = st.text_area("Headers HTTP (un par ligne, format `Clé: Valeur`)",
+                                             value=headers_str, height=100,
+                                             placeholder="Authorization: Bearer { mcpApiToken }\nX-Custom-Header: valeur")
             mf3, mf4 = st.columns(2)
-            with mf3:
-                m_submitted = st.form_submit_button("💾 Enregistrer", type="primary", use_container_width=True)
-            with mf4:
-                m_cancelled = st.form_submit_button("Annuler", use_container_width=True)
+            with mf3: m_submitted = st.form_submit_button("💾 Enregistrer", type="primary", use_container_width=True)
+            with mf4: m_cancelled = st.form_submit_button("Annuler", use_container_width=True)
 
         if m_cancelled:
             st.session_state.mcp_show_form = False
@@ -1272,10 +1275,8 @@ elif main_action == "🔌 Serveurs MCP":
             st.rerun()
 
         if m_submitted:
-            if not m_name.strip():
-                st.error("Le **Nom** est obligatoire.")
-            elif not m_url.strip():
-                st.error("L'**URL** est obligatoire.")
+            if not m_name.strip(): st.error("Le **Nom** est obligatoire.")
+            elif not m_url.strip(): st.error("L'**URL** est obligatoire.")
             else:
                 parsed_headers = {}
                 for line in m_headers_str.strip().split("\n"):
@@ -1283,16 +1284,9 @@ elif main_action == "🔌 Serveurs MCP":
                     if ": " in line:
                         k, v = line.split(": ", 1)
                         parsed_headers[k.strip()] = v.strip()
-
-                payload_mcp = {
-                    "name": m_name.strip(),
-                    "url": m_url.strip(),
-                    "description": m_desc.strip(),
-                    "headers": parsed_headers
-                }
-                if m_scope == "Projet":
-                    payload_mcp["projectId"] = project_id
-
+                payload_mcp = {"name": m_name.strip(), "url": m_url.strip(),
+                               "description": m_desc.strip(), "headers": parsed_headers}
+                if m_scope == "Projet": payload_mcp["projectId"] = project_id
                 with st.spinner("Enregistrement..."):
                     resp_m, act_m = save_mcp(api_key, payload_mcp, st.session_state.mcp_edit_id)
                     if resp_m.status_code in (200, 201):
@@ -1302,55 +1296,39 @@ elif main_action == "🔌 Serveurs MCP":
                         st.session_state.mcp_edit_id = None
                         st.rerun()
                     else:
-                        try:
-                            err = resp_m.json()
-                        except Exception:
-                            err = resp_m.text
+                        try: err = resp_m.json()
+                        except Exception: err = resp_m.text
                         st.error(f"Échec (HTTP {resp_m.status_code}) : {err}")
 
     st.divider()
-
     with st.spinner("Chargement des serveurs MCP..."):
         all_mcps_list = fetch_mcps(api_key)
 
-    if mcp_scope_filter == "Projet":
-        displayed_mcps = [m for m in all_mcps_list if m.get("projectId")]
-    elif mcp_scope_filter == "Organisation":
-        displayed_mcps = [m for m in all_mcps_list if not m.get("projectId")]
-    else:
-        displayed_mcps = all_mcps_list
+    if mcp_scope_filter == "Projet": displayed_mcps = [m for m in all_mcps_list if m.get("projectId")]
+    elif mcp_scope_filter == "Organisation": displayed_mcps = [m for m in all_mcps_list if not m.get("projectId")]
+    else: displayed_mcps = all_mcps_list
 
     if not displayed_mcps:
         st.info("Aucun serveur MCP trouvé pour ce périmètre.")
     else:
         h1, h2, h3, h4, h5, h6 = st.columns([2, 3, 1, 1.5, 0.7, 0.7])
-        h1.caption("Nom")
-        h2.caption("URL")
-        h3.caption("Headers")
-        h4.caption("Périmètre")
-        h5.caption("Modifier")
-        h6.caption("Supprimer")
+        h1.caption("Nom"); h2.caption("URL"); h3.caption("Headers")
+        h4.caption("Périmètre"); h5.caption("Modifier"); h6.caption("Supprimer")
         st.divider()
-
         for mcp in displayed_mcps:
             c1, c2, c3, c4, c5, c6 = st.columns([2, 3, 1, 1.5, 0.7, 0.7])
             with c1:
                 st.markdown(f"**{esc(mcp.get('name', ''))}**")
-                if mcp.get("description"):
-                    st.caption(esc(mcp.get("description", "")))
-            with c2:
-                st.code(mcp.get("url", ""), language=None)
+                if mcp.get("description"): st.caption(esc(mcp.get("description", "")))
+            with c2: st.code(mcp.get("url", ""), language=None)
             with c3:
                 h = mcp.get("headers", {})
                 if h and isinstance(h, dict) and len(h) > 0:
                     st.markdown(f"✅ {len(h)} header{'s' if len(h) > 1 else ''}")
-                else:
-                    st.markdown("—")
+                else: st.markdown("—")
             with c4:
-                if mcp.get("projectId"):
-                    st.markdown("🏷️ Projet")
-                else:
-                    st.markdown("🌐 Organisation")
+                if mcp.get("projectId"): st.markdown("🏷️ Projet")
+                else: st.markdown("🌐 Organisation")
             with c5:
                 if st.button("✏️", key=f"mcp_edit_{mcp['id']}", help="Modifier"):
                     st.session_state.mcp_edit_id = mcp['id']
@@ -1388,14 +1366,11 @@ elif main_action == "📡 Logs API":
                 if 200 <= status < 300: icon = "🟢"
                 elif 400 <= status < 500: icon = "🟠"
                 else: icon = "🔴"
-            else:
-                icon = "❌"
+            else: icon = "❌"
 
             label = f"{icon} [{log['timestamp']}] {log['method']} — {log['url']} (Status: {status})"
-
             with st.expander(label):
                 col_req, col_resp = st.columns(2)
-
                 with col_req:
                     st.markdown("### 📤 Requête Envoyée")
                     if log['req_params']:
@@ -1406,10 +1381,7 @@ elif main_action == "📡 Logs API":
                         st.json(log['req_body'])
                     elif not log['req_params']:
                         st.info("Aucun paramètre ni corps envoyé.")
-
                 with col_resp:
                     st.markdown("### 📥 Réponse Reçue")
-                    if log['resp_body']:
-                        st.json(log['resp_body'])
-                    else:
-                        st.info("Aucun contenu retourné par le serveur.")
+                    if log['resp_body']: st.json(log['resp_body'])
+                    else: st.info("Aucun contenu retourné par le serveur.")
