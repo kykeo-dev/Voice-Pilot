@@ -491,6 +491,16 @@ def fetch_exchange_details(api_key, exchange_id):
 
 # --- SIDEBAR & NAVIGATION ---
 with st.sidebar:
+
+# CHARGEMENT DIFFÉRÉ (hors sidebar)
+if st.session_state.get('_pending_load_id'):
+    pending_id = st.session_state.pop('_pending_load_id')
+    full_obj = next((a for a in assistants_list if a['id'] == pending_id), None)
+    if full_obj:
+        with st.spinner("Chargement de l'assistant et de ses outils..."):
+            tools = fetch_assistant_tools(api_key, pending_id)
+            load_assistant_into_form(full_obj, tools)
+    
     st.image(LOGO_URL, width=150)
     st.divider()
 
@@ -555,14 +565,9 @@ with st.sidebar:
         selected_name = st.selectbox("Sélectionnez l'assistant :", list(ass_options.keys()))
         selected_id = ass_options[selected_name]
 
-        if selected_id != st.session_state.last_loaded_id:
-            full_obj = next((a for a in assistants_list if a['id'] == selected_id), None)
-            if full_obj:
-                with st.spinner("Chargement de l'assistant et de ses outils..."):
-                    tools = fetch_assistant_tools(api_key, selected_id)
-                    load_assistant_into_form(full_obj, tools)
-                    st.session_state.last_loaded_id = selected_id
-                    st.rerun()
+    if selected_id != st.session_state.last_loaded_id:
+        st.session_state.last_loaded_id = selected_id
+        st.session_state._pending_load_id = selected_id
 
 
 # --- MAIN PAGE ROUTING ---
