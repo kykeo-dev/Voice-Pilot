@@ -318,7 +318,26 @@ def fetch_cost_by_assistant(api_key, assistant_id, f_dt, t_dt):
                 details    = [{"metric": item['metric'], "pricing": item.get('pricing', 0) or 0,
                                "value": item.get('data', {}).get('sum', 0)}
                               for item in data if (item.get('pricing') or 0) > 0]
-                return {"total": total, "conv_count": int(conv_count), "total_dur_s": total_dur, "details": details}
+
+                # Détecter la techno depuis les métriques elles-mêmes
+                rt_input  = next((item['data']['sum'] for item in data if item['metric'] == 'usage.realtime.inputAudioTokens'), 0)
+                rt_output = next((item['data']['sum'] for item in data if item['metric'] == 'usage.realtime.outputAudioTokens'), 0)
+                cv_input  = next((item['data']['sum'] for item in data if item['metric'] == 'usage.conversational.inputTextTokens'), 0)
+                stt_dur   = next((item['data']['sum'] for item in data if item['metric'] == 'usage.stt.audioDuration'), 0)
+                tts_chars = next((item['data']['sum'] for item in data if item['metric'] == 'usage.tts.characters'), 0)
+
+                is_sts = (rt_input + rt_output) > 0
+                tech_detail = {
+                    "is_sts": is_sts,
+                    "has_classic_llm": cv_input > 0,
+                    "has_stt": stt_dur > 0,
+                    "has_tts": tts_chars > 0,
+                    "realtime_tokens": rt_input + rt_output,
+                    "classic_tokens": cv_input,
+                }
+
+                return {"total": total, "conv_count": int(conv_count), "total_dur_s": total_dur,
+                        "details": details, "tech": tech_detail}
         return None
     except Exception: return None
 
@@ -1020,20 +1039,28 @@ elif main_action == "💰 Étude de Pricing":
                             for item in sorted(r['details'], key=lambda x: x['pricing'], reverse=True):
                                 st.markdown(f"**{item['metric'].replace('usage.','').replace('.',' › ')}** : `{item['pricing']:.6f} €`  ·  valeur : `{item['value']}`")
 
-                    # --- SYNTHÈSE PAR TECHNOLOGIE (mode rapide) ---
+                    # --- SYNTHÈSE PAR TECHNOLOGIE (mode rapide, depuis les métriques) ---
                     st.divider()
                     st.subheader("🔬 Synthèse par technologie")
+                    st.caption("Détection basée sur les métriques réelles de consommation (realtime tokens vs conversational tokens).")
+
                     stack_costs_r, stack_dur_r, stack_count_r = {}, {}, {}
                     for r in results_agg:
-                        ass_obj = ass_by_id.get(r.get('assistant_id'), {})
-                        sts_id_a = ass_obj.get('stsId') or ((ass_obj.get('sts') or {}).get('id'))
-                        if sts_id_a:
-                            sts_name = (ass_obj.get('sts') or {}).get('name','STS')
-                            key = f"🎙️ STS · {sts_name}"
+                        tech = r.get('tech', {})
+                        if tech.get('is_sts'):
+                            # Tenter de récupérer le nom du modèle STS depuis la config
+                            ass_obj  = ass_by_id.get(r.get('assistant_id'), {})
+                            sts_name = ((ass_obj.get('sts') or {}).get('name','')
+                                        or (ass_obj.get('llm') or {}).get('name','')
+                                        or 'Realtime')
+                            sts_short = sts_name.split('/')[-1] if '/' in sts_name else sts_name
+                            key = f"🎙️ STS · {sts_short}"
                         else:
-                            llm_a = (ass_obj.get('llm') or {}).get('name','') or ass_obj.get('llmId','?')
-                            llm_short = llm_a.split('/')[-1] if '/' in llm_a else llm_a
+                            ass_obj   = ass_by_id.get(r.get('assistant_id'), {})
+                            llm_name  = (ass_obj.get('llm') or {}).get('name','') or 'LLM classique'
+                            llm_short = llm_name.split('/')[-1] if '/' in llm_name else llm_name
                             key = f"🧠 {llm_short}"
+
                         stack_costs_r[key] = stack_costs_r.get(key,0) + r['total']
                         stack_dur_r[key]   = stack_dur_r.get(key,0)   + r['total_dur_s']
                         stack_count_r[key] = stack_count_r.get(key,0) + r['conv_count']
@@ -1049,6 +1076,7 @@ elif main_action == "💰 Étude de Pricing":
                         mpm = prix_vente_min - cpm if prix_vente_min > 0 else None
                         sign_m = "+" if mpm and mpm >= 0 else ""
                         clr_m  = "🟢" if mpm and mpm >= 0 else "🔴"
+                        pct = (c/tot_cost*100) if tot_cost else 0
                         rc = st.columns([2.5,1,1.5,1.5,1.5,1.5])
                         rc[0].markdown(f"**{esc(key)}**")
                         rc[1].markdown(str(cnt))
@@ -1057,7 +1085,6 @@ elif main_action == "💰 Étude de Pricing":
                         rc[4].markdown(f"`{cpm:.4f}`" if dm else "—")
                         if mpm is not None: rc[5].markdown(f"{clr_m} `{sign_m}{mpm:.4f}`")
                         else: rc[5].markdown("—")
-                        pct = (c/tot_cost*100) if tot_cost else 0
                         st.progress(min(pct/100, 1.0))
 
         # --- MODE DÉTAIL ---
