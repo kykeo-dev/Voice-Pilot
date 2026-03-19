@@ -1284,7 +1284,7 @@ elif main_action == "💰 Étude de Pricing":
                     progress_bar.progress((i + 1) / len(valid))
                     cost_data = fetch_exchange_cost(
                         api_key, exc["traceId"],
-                        from_iso=from_iso, to_iso=to_iso
+                        range_from=from_iso, range_to=to_iso
                     )
                     duration_s = exc.get("duration") or 0
                     ass_name = "?"
