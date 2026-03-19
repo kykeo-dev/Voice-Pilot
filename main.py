@@ -486,7 +486,7 @@ def fetch_exchanges(api_key, project_id):
 
 def fetch_exchanges_range(api_key, project_id, from_iso, to_iso, assistant_id=None):
     headers = {'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'}
-    where = {"projectId": project_id, "createdAt": {"gte": from_iso, "lte": to_iso}}
+    where = {"projectId": project_id, "createdAt": {"$gte": from_iso, "$lte": to_iso}}
     if assistant_id:
         where["assistantId"] = assistant_id
     try:
