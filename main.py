@@ -377,6 +377,9 @@ def fetch_cost_global(api_key, project_id, from_iso, to_iso):
         return None
     except Exception:
         return None
+
+#  NOUVELLE FONCTION CRÉÉE ET ISOLÉE :
+def save_assistant(api_key, payload, assistant_id=None):
     headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
     if assistant_id:
         return make_api_request('PATCH', f"{API_BASE}/conversational/assistants/{assistant_id}",
