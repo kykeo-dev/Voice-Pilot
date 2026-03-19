@@ -936,7 +936,7 @@ elif main_action == "💰 Étude de Pricing":
                     prog.progress((i+1)/len(to_analyze))
                     data = fetch_cost_by_assistant(api_key, aid, f_dt, t_dt)
                     if data and data['conv_count'] > 0:
-                        results_agg.append({"assistant": aname, **data})
+                        results_agg.append({"assistant": aname, "assistant_id": aid, **data})
                 prog.empty()
 
                 if not results_agg:
@@ -1016,6 +1016,46 @@ elif main_action == "💰 Étude de Pricing":
                         with st.expander(f"📊 Détail composants — {r['assistant']}"):
                             for item in sorted(r['details'], key=lambda x: x['pricing'], reverse=True):
                                 st.markdown(f"**{item['metric'].replace('usage.','').replace('.',' › ')}** : `{item['pricing']:.6f} €`  ·  valeur : `{item['value']}`")
+
+                    # --- SYNTHÈSE PAR TECHNOLOGIE (mode rapide) ---
+                    st.divider()
+                    st.subheader("🔬 Synthèse par technologie")
+                    stack_costs_r, stack_dur_r, stack_count_r = {}, {}, {}
+                    for r in results_agg:
+                        ass_obj = ass_by_id.get(r.get('assistant_id'), {})
+                        sts_id_a = ass_obj.get('stsId') or ((ass_obj.get('sts') or {}).get('id'))
+                        if sts_id_a:
+                            sts_name = (ass_obj.get('sts') or {}).get('name','STS')
+                            key = f"🎙️ STS · {sts_name}"
+                        else:
+                            llm_a = (ass_obj.get('llm') or {}).get('name','') or ass_obj.get('llmId','?')
+                            llm_short = llm_a.split('/')[-1] if '/' in llm_a else llm_a
+                            key = f"🧠 {llm_short}"
+                        stack_costs_r[key] = stack_costs_r.get(key,0) + r['total']
+                        stack_dur_r[key]   = stack_dur_r.get(key,0)   + r['total_dur_s']
+                        stack_count_r[key] = stack_count_r.get(key,0) + r['conv_count']
+
+                    sr1,sr2,sr3,sr4,sr5,sr6 = st.columns([2.5,1,1.5,1.5,1.5,1.5])
+                    sr1.caption("Stack / Modèle"); sr2.caption("Conv."); sr3.caption("Coût total (€)")
+                    sr4.caption("Coût/conv. (€)"); sr5.caption("Coût/min (€)"); sr6.caption("Marge/min (€)")
+                    st.divider()
+                    for key, c in sorted(stack_costs_r.items(), key=lambda x: x[1], reverse=True):
+                        cnt = stack_count_r[key]
+                        dm  = stack_dur_r[key]/60 if stack_dur_r.get(key) else 0
+                        cpm = c/dm if dm else 0
+                        mpm = prix_vente_min - cpm if prix_vente_min > 0 else None
+                        sign_m = "+" if mpm and mpm >= 0 else ""
+                        clr_m  = "🟢" if mpm and mpm >= 0 else "🔴"
+                        rc = st.columns([2.5,1,1.5,1.5,1.5,1.5])
+                        rc[0].markdown(f"**{esc(key)}**")
+                        rc[1].markdown(str(cnt))
+                        rc[2].markdown(f"`{c:.4f}`")
+                        rc[3].markdown(f"`{c/cnt:.4f}`" if cnt else "—")
+                        rc[4].markdown(f"`{cpm:.4f}`" if dm else "—")
+                        if mpm is not None: rc[5].markdown(f"{clr_m} `{sign_m}{mpm:.4f}`")
+                        else: rc[5].markdown("—")
+                        pct = (c/tot_cost*100) if tot_cost else 0
+                        st.progress(min(pct/100, 1.0))
 
         # --- MODE DÉTAIL ---
         else:
