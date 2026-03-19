@@ -342,10 +342,10 @@ def fetch_cost_by_assistant(api_key, assistant_id, from_iso, to_iso):
         if resp.status_code == 200:
             data = resp.json()
             if isinstance(data, list):
-                total = sum(item.get('pricing', 0) or 0 for item in data)
+                total      = sum(item.get('pricing', 0) or 0 for item in data)
                 conv_count = next((item['data']['sum'] for item in data if item['metric'] == 'exchangeCount'), 0)
                 total_dur  = next((item['data']['sum'] for item in data if item['metric'] == 'duration'), 0)
-                details = [
+                details    = [
                     {"metric": item['metric'], "pricing": item.get('pricing', 0) or 0,
                      "value": item.get('data', {}).get('sum', 0)}
                     for item in data if (item.get('pricing') or 0) > 0
@@ -1188,7 +1188,7 @@ elif main_action == "💰 Étude de Pricing":
         to_iso   = date_to.strftime("%Y-%m-%dT23:59:59.999Z")
 
         # =========================================================
-        # MODE RAPIDE : 1 appel par assistant (ou 1 appel global)
+        # MODE RAPIDE : 1 appel par assistant via context={"assistantId": ...}
         # =========================================================
         if not mode_detail:
             assistants_to_analyze = []
@@ -1214,7 +1214,6 @@ elif main_action == "💰 Étude de Pricing":
                 if not results_agg:
                     st.info("Aucune donnée de coût disponible sur cette période.")
                 else:
-                    # --- MÉTRIQUES GLOBALES ---
                     st.divider()
                     total_cost_all = sum(r['total'] for r in results_agg)
                     total_conv     = sum(r['conv_count'] for r in results_agg)
@@ -1232,8 +1231,6 @@ elif main_action == "💰 Étude de Pricing":
                     m5.metric("⏳ Durée moy.", f"{int(avg_dur // 60)}m {int(avg_dur % 60)}s")
 
                     st.divider()
-
-                    # --- TABLEAU PAR ASSISTANT ---
                     st.subheader("📋 Résumé par assistant")
                     h0, h1, h2, h3, h4, h5 = st.columns([2.5, 1, 1.5, 1.5, 1.5, 1.5])
                     h0.caption("Assistant"); h1.caption("Conv."); h2.caption("Coût total (€)")
@@ -1242,7 +1239,7 @@ elif main_action == "💰 Étude de Pricing":
 
                     for r in sorted(results_agg, key=lambda x: x['total'], reverse=True):
                         dur_min = r['total_dur_s'] / 60 if r['total_dur_s'] else 0
-                        cpm = r['total'] / dur_min if dur_min > 0 else 0
+                        cpm   = r['total'] / dur_min if dur_min > 0 else 0
                         avg_c = r['total'] / r['conv_count'] if r['conv_count'] else 0
                         avg_d = r['total_dur_s'] / r['conv_count'] if r['conv_count'] else 0
 
@@ -1258,7 +1255,7 @@ elif main_action == "💰 Étude de Pricing":
                         st.progress(min(pct / 100, 1.0))
 
                         with st.expander(f"📊 Détail composants — {r['assistant']}"):
-                            for item in r['details']:
+                            for item in sorted(r['details'], key=lambda x: x['pricing'], reverse=True):
                                 label = item["metric"].replace("usage.", "").replace(".", " › ")
                                 st.markdown(f"**{label}** : `{item['pricing']:.6f} €`  ·  valeur : `{item['value']}`")
 
@@ -1285,8 +1282,10 @@ elif main_action == "💰 Étude de Pricing":
 
                 for i, exc in enumerate(valid):
                     progress_bar.progress((i + 1) / len(valid))
-                    cost_data = fetch_exchange_cost(api_key, exc["traceId"],
-                                                    exc.get("createdAt"), exc.get("updatedAt"))
+                    cost_data = fetch_exchange_cost(
+                        api_key, exc["traceId"],
+                        from_iso=from_iso, to_iso=to_iso
+                    )
                     duration_s = exc.get("duration") or 0
                     ass_name = "?"
                     for r in (exc.get("resources") or []):
@@ -1294,7 +1293,8 @@ elif main_action == "💰 Étude de Pricing":
                             ass_name = id_to_name_p.get(r.get("value"), "?"); break
                     total_cost = round(cost_data["total"], 6) if cost_data else 0.0
                     results.append({"date": format_date(exc.get("createdAt", "")), "assistant": ass_name,
-                                    "durée_s": duration_s, "statut": exc.get("status", "?"), "coût": total_cost})
+                                    "durée_s": duration_s, "statut": exc.get("status", "?"), "coût": total_cost,
+                                    "traceId": exc.get("traceId", "")})
 
                 progress_bar.empty()
 
@@ -1319,20 +1319,22 @@ elif main_action == "💰 Étude de Pricing":
 
                 st.divider()
                 st.subheader("📋 Détail par conversation")
-                h0, h1, h2, h3, h4, h5, h6 = st.columns([0.5, 2.5, 2, 1.5, 1, 1.2, 1.2])
+                h0, h1, h2, h3, h4, h5, h6, h7 = st.columns([0.4, 2, 1.5, 1.2, 0.8, 1, 1, 2.5])
                 h0.caption("#"); h1.caption("Date"); h2.caption("Assistant")
                 h3.caption("Durée"); h4.caption("Statut"); h5.caption("Coût (€)"); h6.caption("€/min")
+                h7.caption("TraceId")
                 st.divider()
 
                 for idx, r in enumerate(sorted(results, key=lambda x: x["coût"], reverse=True), 1):
                     dur_s = r["durée_s"]
                     dur_str = f"{int(dur_s) // 60}m {int(dur_s) % 60}s" if dur_s else "—"
                     cpm = (r["coût"] / (dur_s / 60)) if dur_s > 0 else 0
-                    rc = st.columns([0.5, 2.5, 2, 1.5, 1, 1.2, 1.2])
+                    rc = st.columns([0.4, 2, 1.5, 1.2, 0.8, 1, 1, 2.5])
                     rc[0].caption(str(idx)); rc[1].caption(r["date"])
                     rc[2].markdown(f"**{esc(r['assistant'])}**"); rc[3].markdown(dur_str)
                     rc[4].markdown(r["statut"]); rc[5].markdown(f"`{r['coût']:.4f}`")
                     rc[6].markdown(f"`{cpm:.4f}`")
+                    rc[7].code(r.get("traceId", "—"), language=None)
 
                 # Répartition par assistant
                 if not selected_ass_id_pricing and len(results) > 1:
