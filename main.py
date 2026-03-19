@@ -1094,9 +1094,10 @@ elif main_action == "📜 Consulter les conversations":
                     if trace_id:
                         with st.spinner("Calcul du coût..."):
                             cost_data = fetch_exchange_cost(
-                                api_key, trace_id,
-                                exchange_detail.get("createdAt"),
-                                exchange_detail.get("updatedAt")
+                                api_key, 
+                                exc["traceId"],
+                                exc.get("createdAt"),
+                                exc.get("updatedAt")
                             )
                         if cost_data and cost_data["total"] > 0:
                             dur_min = float(duration_s) / 60 if duration_s else 0
