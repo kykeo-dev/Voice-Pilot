@@ -329,10 +329,15 @@ def fetch_exchange_cost(api_key, trace_id, created_at, updated_at):
 
 
 def fetch_cost_by_assistant(api_key, assistant_id, from_iso, to_iso):
-    """Coût agrégé sur la période pour un assistant — 1 seul appel API."""
+    """Coût agrégé sur la période pour un assistant via le paramètre context."""
     headers = {'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'}
     try:
-        params = {"metrics": COST_METRICS, "from": from_iso, "to": to_iso, "assistantId": assistant_id}
+        params = {
+            "metrics": COST_METRICS,
+            "from": from_iso,
+            "to": to_iso,
+            "context": json.dumps({"assistantId": assistant_id})
+        }
         resp = make_api_request('GET', f"{METRICS_BASE}/metrics/bulkAll", headers=headers, params=params)
         if resp.status_code == 200:
             data = resp.json()
