@@ -195,14 +195,20 @@ def make_api_request(method, url, **kwargs):
 def fetch_lists(api_key):
     h = {'Authorization': f'Bearer {api_key}'}
     try:
-        llm = requests.get(f"{API_BASE}/ai/llm",   headers=h, timeout=15)
-        stt = requests.get(f"{API_BASE}/ai/stt/",  headers=h, timeout=15)
-        tts = requests.get(f"{API_BASE}/ai/tts",   headers=h, timeout=15)
-        sts = requests.get(f"{API_BASE}/ai/sts/",  headers=h, timeout=15)
-        if any(r.status_code != 200 for r in [llm, stt, tts]): return None
-        return {'llm': llm.json(), 'stt': stt.json(), 'tts': tts.json(),
-                'sts': sts.json() if sts.status_code == 200 else []}
-    except Exception: return None
+        llm = requests.get(f"{API_BASE}/ai/llm",  headers=h, timeout=15)
+        stt = requests.get(f"{API_BASE}/ai/stt/", headers=h, timeout=15)
+        tts = requests.get(f"{API_BASE}/ai/tts",  headers=h, timeout=15)
+        if any(r.status_code != 200 for r in [llm, stt, tts]):
+            return None
+        # STS isolé pour ne pas faire échouer la validation si l'endpoint est indisponible
+        try:
+            sts = requests.get(f"{API_BASE}/ai/sts/", headers=h, timeout=15)
+            sts_data = sts.json() if sts.status_code == 200 else []
+        except Exception:
+            sts_data = []
+        return {'llm': llm.json(), 'stt': stt.json(), 'tts': tts.json(), 'sts': sts_data}
+    except Exception:
+        return None
 
 
 @st.cache_data(ttl=60, show_spinner=False)
