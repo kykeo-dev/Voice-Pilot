@@ -457,6 +457,55 @@ def fetch_exchanges(api_key, project_id):
         return []
 
 
+COST_METRICS = ",".join([
+    "exchangeCount", "duration", "indivisibleDuration",
+    "usage.stt.audioDuration", "usage.tts.characters",
+    "usage.conversational.inputTextTokens", "usage.conversational.outputTextTokens",
+    "usage.conversational.cachedTextTokens",
+    "usage.realtime.inputTextTokens", "usage.realtime.outputTextTokens",
+    "usage.realtime.inputAudioTokens", "usage.realtime.outputAudioTokens",
+    "usage.realtime.cachedAudioTokens",
+    "usage.postProcessing.inputTextTokens", "usage.postProcessing.outputTextTokens",
+    "usage.postProcessing.cachedTextTokens"
+])
+
+def fetch_exchange_cost(api_key, trace_id, created_at, updated_at):
+    """Récupère le coût total d'un échange via l'API metrics."""
+    headers = {'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'}
+    try:
+        # Fenêtre from/to : jour entier autour de l'échange
+        from_dt = created_at.replace('Z', '+00:00') if created_at else None
+        to_dt   = updated_at.replace('Z', '+00:00') if updated_at else None
+        if not from_dt or not to_dt:
+            return None
+
+        # Normaliser en date ISO jour entier pour la fenêtre
+        from_day = from_dt[:10] + "T00:00:00Z"
+        to_day   = from_dt[:10] + "T23:59:59Z"
+
+        params = {
+            "metrics": COST_METRICS,
+            "from": from_day,
+            "to": to_day,
+            "traceId": trace_id
+        }
+        resp = make_api_request('GET', "https://newprd.reecall.io/metrics/v1/metrics/bulkAll",
+                                headers=headers, params=params)
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, list):
+                total = sum(item.get('pricing', 0) or 0 for item in data)
+                details = [
+                    {"metric": item['metric'], "pricing": item.get('pricing', 0) or 0,
+                     "value": item.get('data', {}).get('sum', 0)}
+                    for item in data if (item.get('pricing') or 0) > 0
+                ]
+                return {"total": total, "details": details}
+        return None
+    except Exception:
+        return None
+
+
 def fetch_exchange_details(api_key, exchange_id):
     headers = {'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'}
     try:
@@ -1072,6 +1121,33 @@ elif main_action == "📜 Consulter les conversations":
                         <b>🔊 TTS :</b> {esc(tts)}{f" / {esc(voice)}" if voice else ""}
                     </div>
                     """, unsafe_allow_html=True)
+
+                    # --- COÛT DE L'ÉCHANGE ---
+                    trace_id = exchange_detail.get("traceId")
+                    if trace_id:
+                        with st.spinner("Calcul du coût..."):
+                            cost_data = fetch_exchange_cost(
+                                api_key, trace_id,
+                                exchange_detail.get("createdAt"),
+                                exchange_detail.get("updatedAt")
+                            )
+                        if cost_data and cost_data["total"] > 0:
+                            st.markdown(f"""
+                            <div class="exchange-card" style="border-color: rgba(61,111,163,0.4);">
+                                <b>💰 Coût estimé</b><br>
+                                <span style="font-size:1.4em; font-weight:bold; color:#3D6FA3;">
+                                    {cost_data['total']:.4f} €
+                                </span>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            with st.expander("📊 Détail du coût par composant"):
+                                for item in cost_data["details"]:
+                                    label = item["metric"].replace("usage.", "").replace(".", " › ")
+                                    st.markdown(f"**{label}** : {item['pricing']:.6f} €")
+                        elif cost_data is not None:
+                            st.info("💰 Coût : 0,00 € (données insuffisantes ou période non facturée)")
+                        else:
+                            st.caption("💰 Coût non disponible pour cet échange.")
 
                     with st.expander("🛠️ Événements (Events)"):
                         events_data = exchange_detail.get("events")
