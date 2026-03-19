@@ -971,7 +971,8 @@ elif main_action == "📜 Consulter les conversations":
                 ass_dict[a.get('name', 'Assistant sans nom')] = a.get('id')
                 id_to_name[a.get('id')] = a.get('name', 'Assistant sans nom')
 
-        with col_f1 := st.columns([1, 2])[0]:
+        col_f1, _ = st.columns([1, 2])
+        with col_f1:
             selected_ass_name = st.selectbox("🤖 Filtrer par Assistant", list(ass_dict.keys()))
             selected_ass_id = ass_dict[selected_ass_name]
 
