@@ -1086,7 +1086,7 @@ elif main_action == "💰 Étude de Pricing":
                 h3.caption("Durée"); h4.caption("Statut"); h5.caption("Coût (€)"); h6.caption("€/min")
                 h7.caption("Marge (€)"); h8.caption("TraceId")
                 st.divider()
-                for idx, r in enumerate(sorted(results, key=lambda x: x["coût"], reverse=True), 1):
+                for idx, r in enumerate(sorted(results, key=lambda x: x["date"], reverse=True), 1):
                     ds = r["durée_s"]
                     dur_str = f"{int(ds)//60}m {int(ds)%60}s" if ds else "—"
                     cpm = r["coût"]/(ds/60) if ds > 0 else 0
