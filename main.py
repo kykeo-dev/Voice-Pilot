@@ -903,6 +903,10 @@ elif main_action == "💰 Étude de Pricing":
         selected_ass_p = st.selectbox("🤖 Assistant", list(ass_dict_p.keys()))
         selected_ass_id_p = ass_dict_p[selected_ass_p]
 
+    col_p1, col_p2 = st.columns([1, 3])
+    with col_p1:
+        prix_vente_min = st.number_input("💶 Prix de vente (€ / min)", min_value=0.0, value=0.20, step=0.01, format="%.4f",
+                                         help="Prix facturé au client par minute d'appel. Permet de calculer la marge brute.")
     mode_detail = st.checkbox("🔍 Charger le détail par conversation (plus lent, limité à 50 conv.)", value=False)
 
     if st.button("🔍 Lancer l'analyse", type="primary"):
@@ -947,6 +951,33 @@ elif main_action == "💰 Étude de Pricing":
                     m3.metric("📊 Coût / conv.",   f"{avg_c:.4f} €")
                     m4.metric("⏱️ Coût / min",     f"{avg_cpm:.4f} €")
                     m5.metric("⏳ Durée moy.",      f"{int(avg_d//60)}m {int(avg_d%60)}s")
+
+                    # --- MARGE ---
+                    if prix_vente_min > 0 and tot_min > 0:
+                        revenu_total  = prix_vente_min * tot_min
+                        marge_total   = revenu_total - tot_cost
+                        marge_pct     = (marge_total / revenu_total * 100) if revenu_total > 0 else 0
+                        marge_min     = prix_vente_min - avg_cpm
+                        revenu_conv   = prix_vente_min * (avg_d / 60) if avg_d else 0
+                        marge_conv    = revenu_conv - avg_c
+
+                        color = "rgba(212,237,218,0.6)" if marge_total >= 0 else "rgba(248,215,218,0.6)"
+                        sign  = "+" if marge_total >= 0 else ""
+                        st.markdown(f"""
+                        <div style="padding:15px;border-radius:8px;background:{color};border:1px solid rgba(128,128,128,0.2);margin:10px 0;">
+                            <b>📈 Analyse de marge</b> &nbsp;|&nbsp; Prix de vente : <b>{prix_vente_min:.4f} € / min</b><br><br>
+                            <span style="font-size:1.3em;font-weight:bold;">{sign}{marge_total:.4f} € de marge brute</span>
+                            &nbsp;&nbsp;
+                            <span style="font-size:1.1em;font-weight:bold;color:{'#155724' if marge_total>=0 else '#721c24'}">
+                                {sign}{marge_pct:.1f}%
+                            </span><br>
+                            <small>
+                                Revenu total : <b>{revenu_total:.4f} €</b> &nbsp;|&nbsp;
+                                Marge / min : <b>{sign}{marge_min:.4f} €</b> &nbsp;|&nbsp;
+                                Marge / conv. : <b>{sign}{marge_conv:.4f} €</b>
+                            </small>
+                        </div>
+                        """, unsafe_allow_html=True)
                     st.divider()
 
                     st.subheader("📋 Résumé par assistant")
@@ -956,13 +987,24 @@ elif main_action == "💰 Étude de Pricing":
                     st.divider()
                     for r in sorted(results_agg, key=lambda x: x['total'], reverse=True):
                         dm = r['total_dur_s']/60 if r['total_dur_s'] else 0
-                        rc = st.columns([2.5,1,1.5,1.5,1.5,1.5])
+                        revenu_r = prix_vente_min * dm if prix_vente_min > 0 and dm > 0 else 0
+                        marge_r  = revenu_r - r['total']
+                        marge_r_pct = (marge_r / revenu_r * 100) if revenu_r > 0 else 0
+                        sign_r = "+" if marge_r >= 0 else ""
+
+                        rc = st.columns([2, 1, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2])
                         rc[0].markdown(f"**{esc(r['assistant'])}**")
                         rc[1].markdown(str(r['conv_count']))
                         rc[2].markdown(f"`{r['total']:.4f}`")
                         rc[3].markdown(f"`{r['total']/r['conv_count']:.4f}`" if r['conv_count'] else "—")
                         rc[4].markdown(f"`{r['total']/dm:.4f}`" if dm else "—")
                         rc[5].markdown(f"{int(r['total_dur_s']//r['conv_count']//60)}m {int(r['total_dur_s']//r['conv_count']%60)}s" if r['conv_count'] else "—")
+                        if prix_vente_min > 0 and dm > 0:
+                            clr = "🟢" if marge_r >= 0 else "🔴"
+                            rc[6].markdown(f"{clr} `{sign_r}{marge_r:.4f}`")
+                            rc[7].markdown(f"`{sign_r}{marge_r_pct:.1f}%`")
+                        else:
+                            rc[6].markdown("—"); rc[7].markdown("—")
                         pct = (r['total']/tot_cost*100) if tot_cost else 0
                         st.progress(min(pct/100, 1.0))
                         with st.expander(f"📊 Détail composants — {r['assistant']}"):
@@ -1014,21 +1056,57 @@ elif main_action == "💰 Étude de Pricing":
                 m5.metric("⏳ Durée moy.",     f"{int(avg_d//60)}m {int(avg_d%60)}s")
                 if max_item: st.caption(f"💡 Conv. la plus coûteuse : **{max_item['date']}** — `{max_item['coût']:.4f} €`")
 
+                # --- MARGE MODE DÉTAIL ---
+                if prix_vente_min > 0 and tot_min > 0:
+                    revenu_total = prix_vente_min * tot_min
+                    marge_total  = revenu_total - tot_cost
+                    marge_pct    = (marge_total / revenu_total * 100) if revenu_total > 0 else 0
+                    sign = "+" if marge_total >= 0 else ""
+                    color = "rgba(212,237,218,0.6)" if marge_total >= 0 else "rgba(248,215,218,0.6)"
+                    st.markdown(f"""
+                    <div style="padding:15px;border-radius:8px;background:{color};border:1px solid rgba(128,128,128,0.2);margin:10px 0;">
+                        <b>📈 Analyse de marge</b> &nbsp;|&nbsp; Prix de vente : <b>{prix_vente_min:.4f} € / min</b><br><br>
+                        <span style="font-size:1.3em;font-weight:bold;">{sign}{marge_total:.4f} € de marge brute</span>
+                        &nbsp;&nbsp;
+                        <span style="font-size:1.1em;font-weight:bold;color:{'#155724' if marge_total>=0 else '#721c24'}">
+                            {sign}{marge_pct:.1f}%
+                        </span><br>
+                        <small>
+                            Revenu total : <b>{revenu_total:.4f} €</b> &nbsp;|&nbsp;
+                            Marge / min : <b>{sign}{prix_vente_min - avg_cpm:.4f} €</b> &nbsp;|&nbsp;
+                            Marge / conv. : <b>{sign}{(revenu_total - tot_cost)/len(results):.4f} €</b>
+                        </small>
+                    </div>
+                    """, unsafe_allow_html=True)
+
                 st.divider()
                 st.subheader("📋 Détail par conversation")
-                h0,h1,h2,h3,h4,h5,h6,h7 = st.columns([0.4,2,1.5,1.2,0.8,1,1,2.5])
+                h0,h1,h2,h3,h4,h5,h6,h7,h8 = st.columns([0.4,1.8,1.3,1,0.7,0.9,0.9,1,1])
                 h0.caption("#"); h1.caption("Date"); h2.caption("Assistant")
-                h3.caption("Durée"); h4.caption("Statut"); h5.caption("Coût (€)"); h6.caption("€/min"); h7.caption("TraceId")
+                h3.caption("Durée"); h4.caption("Statut"); h5.caption("Coût (€)"); h6.caption("€/min")
+                h7.caption("Marge (€)"); h8.caption("TraceId")
                 st.divider()
                 for idx, r in enumerate(sorted(results, key=lambda x: x["coût"], reverse=True), 1):
                     ds = r["durée_s"]
                     dur_str = f"{int(ds)//60}m {int(ds)%60}s" if ds else "—"
                     cpm = r["coût"]/(ds/60) if ds > 0 else 0
-                    rc = st.columns([0.4,2,1.5,1.2,0.8,1,1,2.5])
+                    dur_min_r = ds/60 if ds > 0 else 0
+                    revenu_r = prix_vente_min * dur_min_r if prix_vente_min > 0 and dur_min_r > 0 else 0
+                    marge_r  = revenu_r - r["coût"] if revenu_r > 0 else None
+                    marge_r_pct = (marge_r / revenu_r * 100) if revenu_r > 0 else None
+
+                    rc = st.columns([0.4,1.8,1.3,1,0.7,0.9,0.9,1,1])
                     rc[0].caption(str(idx)); rc[1].caption(r["date"])
                     rc[2].markdown(f"**{esc(r['assistant'])}**"); rc[3].markdown(dur_str)
                     rc[4].markdown(r["statut"]); rc[5].markdown(f"`{r['coût']:.4f}`")
-                    rc[6].markdown(f"`{cpm:.4f}`"); rc[7].code(r.get("traceId","—"), language=None)
+                    rc[6].markdown(f"`{cpm:.4f}`")
+                    if marge_r is not None:
+                        sign_r = "+" if marge_r >= 0 else ""
+                        clr = "🟢" if marge_r >= 0 else "🔴"
+                        rc[7].markdown(f"{clr} `{sign_r}{marge_r:.4f}`  \n`{sign_r}{marge_r_pct:.1f}%`")
+                    else:
+                        rc[7].markdown("—")
+                    rc[8].code(r.get("traceId","—"), language=None)
 
                 if not selected_ass_id_p and len(results) > 1:
                     st.divider(); st.subheader("📊 Répartition par assistant")
