@@ -919,6 +919,9 @@ elif main_action == "💰 Étude de Pricing":
         f_dt = date_from.strftime("%Y-%m-%dT00:00:00.000Z")
         t_dt = date_to.strftime("%Y-%m-%dT23:59:59.999Z")
 
+        # Index assistants disponible dans les deux modes
+        ass_by_id = {a['id']: a for a in (assistants_list or [])}
+
         # --- MODE RAPIDE ---
         if not mode_detail:
             to_analyze = []
