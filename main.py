@@ -9,7 +9,7 @@ import html
 import urllib.parse
 import uuid
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 # --- GESTION DES ARGUMENTS LIGNE DE COMMANDE ---
