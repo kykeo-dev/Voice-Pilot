@@ -1116,12 +1116,22 @@ elif main_action == "💰 Étude de Pricing":
                     llm_used = res_map.get("assistant_config.llm", "")
                     stt_used = res_map.get("assistant_config.stt_model", "")
                     tts_used = res_map.get("assistant_config.tts_model", "")
-                    # Détecter STS : si le LLM contient "realtime" ou "ultravox" ou "gemini-realtime"
-                    is_sts = any(k in llm_used.lower() for k in ["realtime", "ultravox"]) if llm_used else False
+
+                    # Détection STS :
+                    # 1. Le LLM contient "realtime" ou "ultravox"
+                    # 2. OU le LLM contient "gemini-realtime"
+                    # 3. OU tous les champs sont vides (STS natif sans ressources détaillées)
+                    is_sts = (
+                        any(k in llm_used.lower() for k in ["realtime", "ultravox", "gemini-realtime"])
+                        if llm_used
+                        else (not stt_used and not tts_used)  # pas de STT/TTS séparés → STS
+                    )
+
                     if is_sts:
-                        stack_label = f"STS · {llm_used.split('/')[-1] if '/' in llm_used else llm_used}"
+                        sts_label = llm_used.split('/')[-1] if llm_used and '/' in llm_used else (llm_used or "Realtime")
+                        stack_label = f"STS · {sts_label}"
                     else:
-                        stack_label = f"{llm_used.split('/')[-1] if llm_used and '/' in llm_used else llm_used or '?'}"
+                        stack_label = llm_used.split('/')[-1] if llm_used and '/' in llm_used else (llm_used or "?")
 
                     results.append({"date": format_date(exc.get("createdAt","")), "assistant": aname,
                                     "durée_s": dur_s, "statut": exc.get("status","?"),
