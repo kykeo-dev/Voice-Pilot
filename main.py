@@ -911,7 +911,7 @@ elif main_action == "💰 Étude de Pricing":
 
     col_p1, col_p2 = st.columns([1, 3])
     with col_p1:
-        prix_vente_min = st.number_input("💶 Prix de vente (€ / min)", min_value=0.0, value=0.20, step=0.01, format="%.4f",
+        prix_vente_min = st.number_input("💶 Prix de vente (€ / min)", min_value=0.0, value=0.23, step=0.01, format="%.4f",
                                          help="Prix facturé au client par minute d'appel. Permet de calculer la marge brute.")
     mode_detail = st.checkbox("🔍 Charger le détail par conversation (plus lent, limité à 50 conv.)", value=False)
 
@@ -1152,7 +1152,7 @@ elif main_action == "💰 Étude de Pricing":
                         st.markdown(f"**{esc(a)}** — `{c:.4f} €` ({pct:.1f}%)" + (f" · `{c/dm:.4f} €/min`" if dm else ""))
                         st.progress(min(pct/100, 1.0))
 
-                # --- SYNTHÈSE PAR TECHNOLOGIE ---
+                # --- SYNTHÈSE PAR TECHNOLOGIE --- (toujours affichée)
                 st.divider()
                 st.subheader("🔬 Synthèse par technologie")
 
