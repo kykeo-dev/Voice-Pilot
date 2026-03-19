@@ -1031,12 +1031,28 @@ elif main_action == "💰 Étude de Pricing":
                     cd = fetch_exchange_cost(api_key, exc["traceId"], range_from=f_dt, range_to=t_dt)
                     dur_s = exc.get("duration") or 0
                     aname = "?"
+
+                    # Extraire le stack technique depuis les resources
+                    res_map = {r['key']: r['value'] for r in (exc.get("resources") or []) if isinstance(r, dict)}
                     for r in (exc.get("resources") or []):
                         if r.get("key") == "assistant_id": aname = itn.get(r.get("value"),"?"); break
+
+                    llm_used = res_map.get("assistant_config.llm", "")
+                    stt_used = res_map.get("assistant_config.stt_model", "")
+                    tts_used = res_map.get("assistant_config.tts_model", "")
+                    # Détecter STS : si le LLM contient "realtime" ou "ultravox" ou "gemini-realtime"
+                    is_sts = any(k in llm_used.lower() for k in ["realtime", "ultravox"]) if llm_used else False
+                    if is_sts:
+                        stack_label = f"STS · {llm_used.split('/')[-1] if '/' in llm_used else llm_used}"
+                    else:
+                        stack_label = f"{llm_used.split('/')[-1] if llm_used and '/' in llm_used else llm_used or '?'}"
+
                     results.append({"date": format_date(exc.get("createdAt","")), "assistant": aname,
                                     "durée_s": dur_s, "statut": exc.get("status","?"),
                                     "coût": round(cd["total"], 6) if cd else 0.0,
-                                    "traceId": exc.get("traceId","")})
+                                    "traceId": exc.get("traceId",""),
+                                    "llm": llm_used, "stt": stt_used, "tts": tts_used,
+                                    "is_sts": is_sts, "stack": stack_label})
                 prog.empty()
 
                 st.divider()
@@ -1081,10 +1097,10 @@ elif main_action == "💰 Étude de Pricing":
 
                 st.divider()
                 st.subheader("📋 Détail par conversation")
-                h0,h1,h2,h3,h4,h5,h6,h7,h8 = st.columns([0.4,1.8,1.3,1,0.7,0.9,0.9,1,1])
+                h0,h1,h2,h3,h4,h5,h6,h7,h8 = st.columns([0.3,1.6,1.2,1,0.6,0.8,0.8,1,1.8])
                 h0.caption("#"); h1.caption("Date"); h2.caption("Assistant")
                 h3.caption("Durée"); h4.caption("Statut"); h5.caption("Coût (€)"); h6.caption("€/min")
-                h7.caption("Marge (€)"); h8.caption("TraceId")
+                h7.caption("Marge (€)"); h8.caption("Stack / TraceId")
                 st.divider()
                 for idx, r in enumerate(sorted(results, key=lambda x: x["date"], reverse=True), 1):
                     ds = r["durée_s"]
@@ -1095,7 +1111,17 @@ elif main_action == "💰 Étude de Pricing":
                     marge_r  = revenu_r - r["coût"] if revenu_r > 0 else None
                     marge_r_pct = (marge_r / revenu_r * 100) if revenu_r > 0 else None
 
-                    rc = st.columns([0.4,1.8,1.3,1,0.7,0.9,0.9,1,1])
+                    # Stack label
+                    if r.get("is_sts"):
+                        stack_str = f"🎙️ STS · `{r['llm'].split('/')[-1] if '/' in r['llm'] else r['llm']}`"
+                    else:
+                        parts = []
+                        if r.get("llm"): parts.append(f"🧠`{r['llm'].split('/')[-1] if '/' in r['llm'] else r['llm']}`")
+                        if r.get("stt"): parts.append(f"🎤`{r['stt'].split('/')[-1] if '/' in r['stt'] else r['stt']}`")
+                        if r.get("tts"): parts.append(f"🔊`{r['tts']}`")
+                        stack_str = " ".join(parts) if parts else "—"
+
+                    rc = st.columns([0.3,1.6,1.2,1,0.6,0.8,0.8,1,1.8])
                     rc[0].caption(str(idx)); rc[1].caption(r["date"])
                     rc[2].markdown(f"**{esc(r['assistant'])}**"); rc[3].markdown(dur_str)
                     rc[4].markdown(r["statut"]); rc[5].markdown(f"`{r['coût']:.4f}`")
@@ -1106,7 +1132,7 @@ elif main_action == "💰 Étude de Pricing":
                         rc[7].markdown(f"{clr} `{sign_r}{marge_r:.4f}`  \n`{sign_r}{marge_r_pct:.1f}%`")
                     else:
                         rc[7].markdown("—")
-                    rc[8].code(r.get("traceId","—"), language=None)
+                    rc[8].markdown(stack_str + f"  \n`{r.get('traceId','—')[:20]}…`" if r.get('traceId') else stack_str)
 
                 if not selected_ass_id_p and len(results) > 1:
                     st.divider(); st.subheader("📊 Répartition par assistant")
@@ -1117,8 +1143,78 @@ elif main_action == "💰 Étude de Pricing":
                     for a, c in sorted(ac.items(), key=lambda x: x[1], reverse=True):
                         pct = (c/tot_cost*100) if tot_cost else 0
                         dm = ad[a]/60 if ad.get(a) else 0
-                        st.markdown(f"**{esc(a)}** — `{c:.4f} €` ({pct:.1f}%) · `{c/dm:.4f} €/min`" if dm else f"**{esc(a)}** — `{c:.4f} €` ({pct:.1f}%)")
+                        st.markdown(f"**{esc(a)}** — `{c:.4f} €` ({pct:.1f}%)" + (f" · `{c/dm:.4f} €/min`" if dm else ""))
                         st.progress(min(pct/100, 1.0))
+
+                # --- SYNTHÈSE PAR TECHNOLOGIE ---
+                st.divider()
+                st.subheader("🔬 Synthèse par technologie")
+
+                # Grouper par stack
+                stack_costs = {}
+                stack_dur   = {}
+                stack_count = {}
+                for r in results:
+                    if r.get("is_sts"):
+                        model_name = r['llm'].split('/')[-1] if r.get('llm') and '/' in r['llm'] else r.get('llm','STS')
+                        key = f"🎙️ STS · {model_name}"
+                    else:
+                        llm_short = r['llm'].split('/')[-1] if r.get('llm') and '/' in r['llm'] else r.get('llm','?')
+                        key = f"🧠 {llm_short}"
+                    stack_costs[key] = stack_costs.get(key, 0) + r["coût"]
+                    stack_dur[key]   = stack_dur.get(key, 0)   + r["durée_s"]
+                    stack_count[key] = stack_count.get(key, 0) + 1
+
+                hs1,hs2,hs3,hs4,hs5,hs6 = st.columns([2.5,1,1.5,1.5,1.5,1.5])
+                hs1.caption("Stack / Modèle"); hs2.caption("Conv."); hs3.caption("Coût total (€)")
+                hs4.caption("Coût/conv. (€)"); hs5.caption("Coût/min (€)"); hs6.caption("Marge/min (€)")
+                st.divider()
+                for key, c in sorted(stack_costs.items(), key=lambda x: x[1], reverse=True):
+                    cnt = stack_count[key]
+                    dm  = stack_dur[key]/60 if stack_dur.get(key) else 0
+                    cpm = c/dm if dm else 0
+                    mpm = prix_vente_min - cpm if prix_vente_min > 0 else None
+                    sign_m = "+" if mpm and mpm >= 0 else ""
+                    clr_m  = "🟢" if mpm and mpm >= 0 else "🔴"
+                    rc = st.columns([2.5,1,1.5,1.5,1.5,1.5])
+                    rc[0].markdown(f"**{esc(key)}**")
+                    rc[1].markdown(str(cnt))
+                    rc[2].markdown(f"`{c:.4f}`")
+                    rc[3].markdown(f"`{c/cnt:.4f}`" if cnt else "—")
+                    rc[4].markdown(f"`{cpm:.4f}`" if dm else "—")
+                    if mpm is not None: rc[5].markdown(f"{clr_m} `{sign_m}{mpm:.4f}`")
+                    else: rc[5].markdown("—")
+                    pct = (c/tot_cost*100) if tot_cost else 0
+                    st.progress(min(pct/100, 1.0))
+
+                # STT breakdown (mode classique uniquement)
+                stt_costs  = {}
+                stt_counts = {}
+                for r in results:
+                    if not r.get("is_sts") and r.get("stt"):
+                        stt_short = r['stt'].split('/')[-1] if '/' in r['stt'] else r['stt']
+                        key = f"🎤 {stt_short}"
+                        stt_costs[key]  = stt_costs.get(key, 0)  + r["coût"]
+                        stt_counts[key] = stt_counts.get(key, 0) + 1
+                if stt_costs:
+                    st.caption("**STT utilisés**")
+                    for key, c in sorted(stt_costs.items(), key=lambda x: x[1], reverse=True):
+                        pct = (c/tot_cost*100) if tot_cost else 0
+                        st.markdown(f"{esc(key)} — `{c:.4f} €` ({pct:.1f}%) · {stt_counts[key]} conv.")
+
+                # TTS breakdown
+                tts_costs  = {}
+                tts_counts = {}
+                for r in results:
+                    if not r.get("is_sts") and r.get("tts"):
+                        key = f"🔊 {r['tts']}"
+                        tts_costs[key]  = tts_costs.get(key, 0)  + r["coût"]
+                        tts_counts[key] = tts_counts.get(key, 0) + 1
+                if tts_costs:
+                    st.caption("**TTS utilisés**")
+                    for key, c in sorted(tts_costs.items(), key=lambda x: x[1], reverse=True):
+                        pct = (c/tot_cost*100) if tot_cost else 0
+                        st.markdown(f"{esc(key)} — `{c:.4f} €` ({pct:.1f}%) · {tts_counts[key]} conv.")
 
 # === VUE 5 : VARIABLES ===
 elif main_action == "🔑 Variables":
